@@ -1,0 +1,35 @@
+appId: tv.tvwave.app.debug
+---
+- runFlow: open-epg.yaml
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: epg-edit
+    focused: true
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: delete-cancel
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible: "Источник EPG"
+- pressKey: Remote Dpad Up
+- pressKey: Remote Dpad Center
+- assertVisible: "Изменить телепрограмму"
+- assertVisible:
+    id: epg-paste
+    focused: true
+- pressKey: Remote Dpad Up
+- assertVisible:
+    text: "http://10.0.2.2:8765/epg/1.xml"
+    focused: true
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: epg-paste
+    focused: true
+- pressKey: back
+- assertVisible:
+    id: epg-edit
+    focused: true
+- pressKey: back
+- assertVisible: "EPG 01"
+- takeScreenshot: epg-edit-cancel-pass

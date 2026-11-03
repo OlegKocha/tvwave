@@ -1,0 +1,17 @@
+appId: tv.tvwave.app.debug
+---
+- runFlow: ../open-epg.yaml
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: epg-edit
+    focused: true
+- pressKey: Remote Dpad Center
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: epg-phone
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: phone-qr
+- takeScreenshot: epg-phone-qr

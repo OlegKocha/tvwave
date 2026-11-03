@@ -1,0 +1,21 @@
+appId: tv.tvwave.app.debug
+---
+- launchApp:
+    clearState: true
+- tapOn:
+    id: "language:ru"
+- assertVisible:
+    id: add
+    focused: true
+- takeScreenshot: welcome-screen
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: welcome-phone
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: phone-qr
+- assertVisible:
+    id: phone-close
+    focused: true
+- takeScreenshot: welcome-qr

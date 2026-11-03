@@ -1,0 +1,9 @@
+appId: tv.tvwave.app.debug
+---
+- launchApp
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Up
+- pressKey: Remote Dpad Center
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: player-hud

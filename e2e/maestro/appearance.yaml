@@ -1,0 +1,50 @@
+appId: tv.tvwave.app.debug
+---
+- runFlow: open-epg.yaml
+- pressKey: back
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: appearance
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: font-size
+    focused: true
+- assertVisible: "100%"
+- repeat:
+    times: 8
+    commands:
+      - pressKey: Remote Dpad Left
+- assertVisible: "60%"
+- pressKey: Remote Dpad Left
+- assertVisible: "60%"
+- takeScreenshot: font-60
+- repeat:
+    times: 14
+    commands:
+      - pressKey: Remote Dpad Right
+- assertVisible: "130%"
+- assertVisible:
+    id: font-size
+    focused: true
+- pressKey: back
+- assertVisible:
+    id: appearance
+    focused: true
+- stopApp
+- runFlow: open-epg.yaml
+- pressKey: back
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Center
+- assertVisible: "130%"
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: font-reset
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible: "100%"
+- pressKey: Remote Dpad Up
+- assertVisible:
+    id: font-size
+    focused: true
+- takeScreenshot: appearance-pass

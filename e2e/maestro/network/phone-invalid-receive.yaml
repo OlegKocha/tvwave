@@ -1,0 +1,21 @@
+appId: tv.tvwave.app.debug
+---
+- assertVisible: 'Ссылка получена с телефона.*'
+- assertVisible:
+    id: validate
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible: 'Это не M3U/M3U8.*'
+- assertNotVisible:
+    id: source-add
+- assertVisible:
+    id: validate
+    focused: true
+- takeScreenshot: invalid-playlist-rejected
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: source-phone
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: phone-qr

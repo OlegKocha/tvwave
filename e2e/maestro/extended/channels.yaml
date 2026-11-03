@@ -1,0 +1,35 @@
+appId: tv.tvwave.app.debug
+---
+- runFlow: ../programmes/start-preview.yaml
+- pressKey: Remote Dpad Center
+- pressKey: Remote Dpad Center
+- pressKey: Remote Dpad Down
+- assertVisible: 'Тестовый канал 2   В эфире'
+- pressKey: Remote Dpad Down
+- assertVisible: 'Тестовый канал 3   В эфире'
+- pressKey: back
+- pressKey: back
+- pressKey: back
+- pressKey: back
+- assertVisible:
+    id: main-tv
+    focused: true
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Center
+- assertVisible: 'Избранное · 1'
+- pressKey: back
+- pressKey: back
+- pressKey: Remote Dpad Up
+- pressKey: Remote Dpad Up
+- pressKey: Remote Dpad Center
+- inputText: '16'
+- hideKeyboard
+- assertVisible: 'Найдено: 1'
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: search-results
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible: 'Все каналы · 1'
+- pressKey: back

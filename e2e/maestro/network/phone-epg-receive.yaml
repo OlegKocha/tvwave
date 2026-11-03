@@ -1,0 +1,8 @@
+appId: tv.tvwave.app.debug
+---
+- assertVisible: 'Ссылка получена с телефона.*'
+- assertVisible:
+    id: epg-save
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible: 'Телепрограммы'

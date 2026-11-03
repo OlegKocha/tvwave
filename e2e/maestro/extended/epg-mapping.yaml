@@ -1,0 +1,101 @@
+appId: tv.tvwave.app.debug
+---
+- runFlow: ../open-epg.yaml
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: epg-matches
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible: 'Каналов: 0'
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: match-query
+    focused: true
+- pressKey: Remote Dpad Up
+- pressKey: Remote Dpad Center
+- assertVisible: 'Каналов: 16'
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: 'match:.*'
+    focused: true
+- pressKey: Remote Dpad Up
+- assertVisible:
+    id: match-query
+    focused: true
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: match-auto
+    focused: true
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: 'match-source:.*'
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible: 'Канал в EPG'
+- hideKeyboard
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: 'catalog:test1'
+    focused: true
+- pressKey: Remote Dpad Up
+- assertVisible:
+    id: catalog-input
+    focused: true
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Center
+- assertVisible: 'Задано вручную'
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: 'match:.*'
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: 'match-source:.*'
+    focused: true
+- pressKey: Remote Dpad Up
+- assertVisible:
+    id: match-auto
+    focused: true
+- pressKey: Remote Dpad Center
+- assertNotVisible: 'Задано вручную'
+- pressKey: back
+- assertVisible:
+    id: epg-matches
+    focused: true
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: epg-update
+    focused: true
+- pressKey: Remote Dpad Center
+- extendedWaitUntil:
+    visible: '.*обновлено.*16 передач.*'
+    timeout: 30000
+- assertVisible:
+    id: epg-update
+    focused: true
+- repeat:
+    times: 3
+    commands:
+      - pressKey: Remote Dpad Up
+- assertVisible:
+    id: 'epg-source:.*'
+    focused: true
+- pressKey: Remote Dpad Center
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: epg-delete
+    focused: true
+- pressKey: Remote Dpad Center
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: epg-delete-confirm
+    focused: true
+- pressKey: Remote Dpad Center
+- assertNotVisible: 'EPG 01'
+- assertVisible:
+    id: epg-add

@@ -1,0 +1,38 @@
+appId: tv.tvwave.app.debug
+---
+- runFlow: ../open-epg.yaml
+- pressKey: back
+- repeat:
+    times: 2
+    commands:
+      - pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: audio-language
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible: 'Исходный'
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Center
+- assertVisible: 'Вкл.'
+- pressKey: back
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Center
+- assertVisible: 'Для просмотра достаточно стрелок, OK и кнопки «Назад».'
+- pressKey: back
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: resume
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible: 'Вкл.'
+- stopApp
+- runFlow: ../open-epg.yaml
+- pressKey: back
+- repeat:
+    times: 4
+    commands:
+      - pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Center
+- assertVisible: 'Вкл.'

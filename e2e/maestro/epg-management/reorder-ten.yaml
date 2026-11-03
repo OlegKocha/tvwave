@@ -1,0 +1,25 @@
+appId: tv.tvwave.app.debug
+---
+- runFlow: ../open-epg.yaml
+- pressKey: Remote Dpad Center
+- pressKey: Remote Dpad Up
+- pressKey: Remote Dpad Up
+- assertVisible:
+    id: epg-order
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: epg-move:aad22ede-3a09-3494-b4ad-20ef58a0cfae
+    focused: true
+- pressKey: Remote Dpad Center
+- repeat:
+    times: 9
+    commands:
+      - pressKey: Remote Dpad Down
+- assertVisible: '10. EPG 01'
+- assertVisible:
+    id: epg-move:aad22ede-3a09-3494-b4ad-20ef58a0cfae
+    focused: true
+- takeScreenshot: ten-sources-moved
+- pressKey: Remote Dpad Center
+- pressKey: back

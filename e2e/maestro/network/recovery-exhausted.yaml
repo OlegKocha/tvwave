@@ -1,0 +1,19 @@
+appId: tv.tvwave.app.debug
+---
+- runFlow: recovery-open.yaml
+- extendedWaitUntil:
+    visible: "Восстанавливаем эфир.*"
+    timeout: 20000
+- takeScreenshot: recovery-attempt
+- extendedWaitUntil:
+    visible:
+      id: playback-status
+      text: 'Связь с каналом прервалась.*'
+    timeout: 90000
+- assertVisible: 'Повторить'
+- pressKey: Remote Dpad Right
+- pressKey: Remote Dpad Right
+- assertVisible:
+    id: player-pause
+    focused: true
+- takeScreenshot: retries-exhausted

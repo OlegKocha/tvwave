@@ -1,0 +1,8 @@
+appId: tv.tvwave.app.debug
+---
+- runFlow: recovery-open.yaml
+- extendedWaitUntil:
+    visible: 'Источник отказал в доступе.*'
+    timeout: 20000
+- assertVisible: 'Повторить'
+- assertNotVisible: 'Восстанавливаем эфир.*'

@@ -1,0 +1,20 @@
+appId: tv.tvwave.app.debug
+---
+- pressKey: Remote Dpad Center
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: epg-paste
+    focused: true
+- pressKey: Remote Dpad Up
+- pressKey: Remote Dpad Center
+- inputText: '?qa=keyboard'
+- pressKey: back
+- assertVisible: 'Изменить телепрограмму'
+- assertVisible:
+    text: '.*qa=keyboard.*'
+    focused: true
+- pressKey: back
+- assertVisible:
+    id: epg-edit
+    focused: true
+- pressKey: back

@@ -1,0 +1,82 @@
+appId: tv.tvwave.app.debug
+---
+- launchApp:
+    clearState: true
+- tapOn:
+    id: "language:ru"
+- assertVisible:
+    id: add
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: source-add
+- assertVisible:
+    id: source-url
+    focused: true
+- pressKey: Remote Dpad Center
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Center
+- inputText: "http://10.0.2.2:8765/invalid.m3u8"
+- hideKeyboard
+- repeat:
+    times: 4
+    commands:
+      - pressKey: Remote Dpad Down
+- assertVisible:
+    id: source-add
+    focused: true
+- takeScreenshot: add-visible-without-validation
+- pressKey: Remote Dpad Center
+- assertVisible: ".*отсутствует заголовок.*"
+- assertVisible:
+    id: source-add
+    focused: true
+- repeat:
+    times: 4
+    commands:
+      - pressKey: Remote Dpad Up
+- pressKey: Remote Dpad Center
+- eraseText
+- inputText: "http://10.0.2.2:8765/playlist.m3u8"
+- hideKeyboard
+- repeat:
+    times: 4
+    commands:
+      - pressKey: Remote Dpad Down
+- assertVisible:
+    id: source-add
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible: "Все каналы · 16"
+- stopApp
+- launchApp
+- assertVisible: "Все каналы · 16"
+- runFlow: open-epg.yaml
+- pressKey: back
+- pressKey: Remote Dpad Up
+- pressKey: Remote Dpad Center
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: playlist-edit
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: source-add
+    focused: true
+- repeat:
+    times: 4
+    commands:
+      - pressKey: Remote Dpad Up
+- pressKey: Remote Dpad Center
+- eraseText
+- inputText: "http://10.0.2.2:8765/playlist.m3u8?edited=1"
+- hideKeyboard
+- repeat:
+    times: 4
+    commands:
+      - pressKey: Remote Dpad Down
+- assertVisible:
+    id: source-add
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible: "Все каналы · 16"
+- takeScreenshot: direct-import-and-edit-pass

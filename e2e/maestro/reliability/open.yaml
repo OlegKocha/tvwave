@@ -1,0 +1,6 @@
+appId: tv.tvwave.app.debug
+---
+- runFlow: ../open-epg.yaml
+- assertVisible:
+    id: epg-source:aad22ede-3a09-3494-b4ad-20ef58a0cfae
+    focused: true

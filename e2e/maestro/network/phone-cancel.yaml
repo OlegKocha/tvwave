@@ -1,0 +1,6 @@
+appId: tv.tvwave.app.debug
+---
+- pressKey: back
+- assertVisible: 'Новый плейлист'
+- assertNotVisible:
+    id: phone-qr

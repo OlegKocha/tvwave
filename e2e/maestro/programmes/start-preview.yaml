@@ -1,0 +1,17 @@
+appId: tv.tvwave.app.debug
+---
+- launchApp
+- assertVisible:
+    id: guide-brand
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Up
+- assertVisible:
+    id: guide
+    focused: true
+- pressKey: Remote Dpad Center
+- extendedWaitUntil:
+    visible: "Смотрим · Тестовый канал 1"
+    timeout: 15000
+- assertVisible:
+    id: guide-programme-title
+    text: "Передача 0 · Канал 1"

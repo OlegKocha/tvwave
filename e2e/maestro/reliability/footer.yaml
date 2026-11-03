@@ -1,0 +1,5 @@
+appId: tv.tvwave.app.debug
+---
+- assertVisible:
+    id: epg-interval
+    focused: true

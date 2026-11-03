@@ -1,0 +1,60 @@
+appId: tv.tvwave.app.debug
+---
+- runFlow: start-preview.yaml
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: player-pause
+    focused: true
+- pressKey: Remote Dpad Left
+- assertVisible:
+    id: channel-browser
+    focused: true
+- assertVisible:
+    id: browse-title
+    text: "Передача 0 · Канал 1"
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: browse-selected-channel
+    text: "Тестовый канал 2"
+- assertVisible:
+    id: browse-title
+    text: "Передача 0 · Канал 2"
+- assertVisible: "Эфир продолжается"
+- pressKey: Remote Dpad Right
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: browse-title
+    text: "Передача 1 · Канал 2"
+- takeScreenshot: three-column-browser
+- pressKey: Remote Dpad Right
+- repeat:
+    times: 40
+    commands:
+      - pressKey: Remote Dpad Down
+- assertVisible:
+    id: browse-scroll-position
+    text: "Конец описания · ← К передачам"
+- assertVisible:
+    id: browse-description
+    text: ".*Конец описания 1.*"
+- takeScreenshot: browser-description-end
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: programme-details
+- assertVisible:
+    id: details-title
+    text: "Передача 1 · Канал 2"
+- assertVisible:
+    id: details-live-channel
+    text: "Тестовый канал 1"
+- pressKey: back
+- assertVisible:
+    id: channel-browser
+- assertVisible:
+    id: browse-title
+    text: "Передача 0 · Канал 2"
+- pressKey: back
+- assertVisible:
+    id: player-hud
+- assertNotVisible:
+    id: channel-browser

@@ -1,0 +1,8 @@
+appId: tv.tvwave.app.debug
+---
+- runFlow: recovery-open.yaml
+- extendedWaitUntil:
+    notVisible:
+      id: playback-status
+    timeout: 60000
+- takeScreenshot: recovered

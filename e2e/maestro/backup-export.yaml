@@ -1,0 +1,20 @@
+appId: tv.tvwave.app.debug
+---
+- runFlow: open-epg.yaml
+- pressKey: back
+- repeat:
+    times: 5
+    commands:
+      - pressKey: Remote Dpad Down
+- assertVisible:
+    id: backup
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: export
+    focused: true
+- pressKey: Remote Dpad Center
+- extendedWaitUntil:
+    visible: ".*Копия проверена и сохранена.*"
+    timeout: 20000
+- takeScreenshot: backup-export-pass

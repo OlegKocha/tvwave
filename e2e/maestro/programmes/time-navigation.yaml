@@ -1,0 +1,31 @@
+appId: tv.tvwave.app.debug
+---
+- runFlow: start-preview.yaml
+- pressKey: Remote Dpad Right
+- repeat:
+    times: ${FUTURE_STEPS}
+    commands:
+      - pressKey: Remote Dpad Right
+- assertVisible:
+    id: guide-programme-title
+    text: "Передача ${FUTURE_STEPS} · Канал 1"
+- takeScreenshot: guide-tomorrow-23
+- repeat:
+    times: 19
+    commands:
+      - pressKey: Remote Dpad Left
+- assertVisible:
+    id: guide-programme-title
+    text: "Передача ${EARLY_STEPS} · Канал 1"
+- takeScreenshot: guide-tomorrow-04
+- pressKey: back
+- assertVisible:
+    id: guide-programme-title
+    text: "Передача 0 · Канал 1"
+# OK now acts on the channel name, not the programme.
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: player-hud
+- assertNotVisible:
+    id: programme-details
+- takeScreenshot: back-resets-to-channel

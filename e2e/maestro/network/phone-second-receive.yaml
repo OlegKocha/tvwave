@@ -1,0 +1,16 @@
+appId: tv.tvwave.app.debug
+---
+- assertVisible: 'Ссылка получена с телефона.*'
+- assertVisible:
+    id: validate
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: source-add
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible: 'Все каналы · 32'
+- takeScreenshot: second-playlist-added
+- stopApp
+- launchApp
+- assertVisible: 'Все каналы · 32'

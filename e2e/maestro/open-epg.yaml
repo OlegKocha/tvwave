@@ -1,0 +1,26 @@
+appId: tv.tvwave.app.debug
+---
+- launchApp
+- assertVisible:
+    id: guide-brand
+- pressKey: Remote Dpad Down
+- pressKey: back
+- assertVisible:
+    id: "group:Все каналы"
+    focused: true
+- pressKey: back
+- assertVisible:
+    id: main-tv
+    focused: true
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: main-settings
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: playlists
+    focused: true
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Center
+- assertVisible: "Телепрограммы"

@@ -1,0 +1,35 @@
+appId: tv.tvwave.app.debug
+---
+- launchApp
+- assertVisible:
+    id: guide-brand
+- pressKey: back
+- pressKey: back
+- assertVisible:
+    id: main-tv
+    focused: true
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: playlists
+    focused: true
+- pressKey: Remote Dpad Center
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: add
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: source-url
+    focused: true
+- assertVisible:
+    id: source-phone
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: source-phone
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: phone-qr
+- takeScreenshot: settings-qr

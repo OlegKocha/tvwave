@@ -1,0 +1,86 @@
+appId: tv.tvwave.app.debug
+---
+- launchApp
+- assertVisible:
+    id: guide-brand
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Left
+- assertVisible:
+    id: 'group:Все каналы'
+    focused: true
+- assertVisible:
+    id: main-rail
+- assertVisible:
+    id: rail-brand
+- assertVisible:
+    id: rail-search
+- assertVisible:
+    id: rail-tv
+- assertVisible:
+    id: rail-favourites
+- assertVisible:
+    id: rail-settings
+- assertNotVisible:
+    id: main-search
+- takeScreenshot: collapsed-rail
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: 'group:Избранное'
+    focused: true
+- pressKey: Remote Dpad Up
+- pressKey: Remote Dpad Left
+- assertVisible:
+    id: main-tv
+    focused: true
+- assertNotVisible:
+    id: main-rail
+- assertVisible:
+    id: main-brand
+- assertVisible:
+    id: main-search
+- assertVisible:
+    id: main-favourites
+- assertVisible:
+    id: main-settings
+- takeScreenshot: expanded-menu
+- pressKey: Remote Dpad Right
+- assertVisible:
+    id: 'group:Все каналы'
+    focused: true
+- assertVisible:
+    id: main-rail
+- pressKey: Remote Dpad Left
+- pressKey: Remote Dpad Up
+- assertVisible:
+    id: main-search
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible: 'Название канала'
+- pressKey: back
+- pressKey: back
+- assertVisible:
+    id: main-search
+    focused: true
+- repeat:
+    times: 3
+    commands:
+      - pressKey: Remote Dpad Down
+- assertVisible:
+    id: main-settings
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: playlists
+    focused: true
+- pressKey: back
+- assertVisible:
+    id: main-settings
+    focused: true
+- pressKey: Remote Dpad Right
+- assertVisible:
+    id: main-rail
+- pressKey: Remote Dpad Right
+- assertNotVisible:
+    id: main-rail
+- assertVisible:
+    id: guide-brand

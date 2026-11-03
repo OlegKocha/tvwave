@@ -1,0 +1,18 @@
+appId: tv.tvwave.app.debug
+---
+- runFlow: ../open-epg.yaml
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: epg-edit
+    focused: true
+- assertVisible: 'В источнике есть передачи на завтра'
+- pressKey: Remote Dpad Up
+- assertVisible:
+    id: epg-refresh-one
+    focused: true
+- pressKey: Remote Dpad Center
+- extendedWaitUntil:
+    visible: '.*Успешно обновлена.*16 передач.*'
+    timeout: 20000
+- assertVisible: 'В источнике нет передач на завтра'
+- takeScreenshot: source-refreshed

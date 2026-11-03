@@ -1,0 +1,38 @@
+appId: tv.tvwave.app.debug
+---
+- runFlow: open-epg.yaml
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: epg-interval
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: "interval:12"
+    focused: true
+- pressKey: Remote Dpad Up
+- pressKey: Remote Dpad Center
+- assertVisible: "6 ч"
+- assertVisible:
+    id: "epg-source:aad22ede-3a09-3494-b4ad-20ef58a0cfae"
+    focused: true
+- repeat:
+    times: 4
+    commands:
+      - pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Center
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Center
+- assertVisible: "24 ч"
+- repeat:
+    times: 4
+    commands:
+      - pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Center
+- pressKey: Remote Dpad Up
+- pressKey: Remote Dpad Center
+- assertVisible: "12 ч"
+- takeScreenshot: epg-interval-pass

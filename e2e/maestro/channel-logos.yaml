@@ -1,0 +1,54 @@
+appId: tv.tvwave.app.debug
+---
+- launchApp
+- assertVisible:
+    id: guide-brand
+- extendedWaitUntil:
+    visible:
+      id: 'channel-logo:${C1}'
+    timeout: 15000
+- extendedWaitUntil:
+    visible:
+      id: 'channel-logo:${C6}'
+    timeout: 15000
+- assertVisible:
+    id: 'channel-letter:${C2}'
+- assertVisible:
+    id: 'channel-letter:${C3}'
+- assertVisible:
+    id: 'channel-letter:${C4}'
+- assertVisible:
+    id: 'channel-letter:${C5}'
+- takeScreenshot: logos-and-fallbacks
+- repeat:
+    times: 6
+    commands:
+      - pressKey: Remote Dpad Down
+- assertVisible:
+    id: 'channel-letter:${C7}'
+- repeat:
+    times: 6
+    commands:
+      - pressKey: Remote Dpad Up
+- assertVisible:
+    id: 'channel-logo:${C1}'
+- pressKey: Remote Dpad Center
+- extendedWaitUntil:
+    visible: 'Смотрим · Тестовый канал 1'
+    timeout: 15000
+- pressKey: Remote Dpad Center
+- pressKey: Remote Dpad Left
+- assertVisible:
+    id: channel-browser
+- assertVisible:
+    id: 'channel-logo:${C1}'
+- assertVisible:
+    id: 'channel-letter:${C2}'
+- takeScreenshot: browser-logos
+- stopApp
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: 'channel-logo:${C1}'
+    timeout: 15000
+- takeScreenshot: cached-after-restart

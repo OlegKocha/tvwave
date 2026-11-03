@@ -1,0 +1,9 @@
+appId: tv.tvwave.app.debug
+---
+- assertVisible: 'Повторить'
+- pressKey: Remote Dpad Center
+- extendedWaitUntil:
+    notVisible:
+      id: playback-status
+    timeout: 20000
+- takeScreenshot: manual-retry

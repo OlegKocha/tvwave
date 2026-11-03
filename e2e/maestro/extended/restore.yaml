@@ -1,0 +1,43 @@
+appId: tv.tvwave.app.debug
+---
+# Starts after reinstalling the debug APK; the actual export is copied back by the runner.
+- launchApp
+- runFlow:
+    when:
+      visible:
+        id: "language:ru"
+    commands:
+      - tapOn:
+          id: "language:ru"
+- assertVisible:
+    id: add
+- tapOn:
+    id: restore
+- assertVisible: 'Резервная копия'
+- tapOn: 'Восстановить из файла'
+- tapOn:
+    id: file-import
+- tapOn:
+    text: 'qa-export.tvwavebackup'
+- assertVisible: 'Копия проверена'
+- assertVisible: '.*Каналов: 16.*'
+- tapOn:
+    id: restore-cancel
+- assertVisible: 'Резервная копия'
+- tapOn: 'Восстановить из файла'
+- tapOn:
+    id: file-import
+- tapOn:
+    text: 'qa-export.tvwavebackup'
+- tapOn:
+    id: restore-apply
+- assertVisible: 'Все каналы · 16'
+- stopApp
+- launchApp
+- assertVisible: 'Все каналы · 16'
+
+- runFlow: ../open-epg.yaml
+- pressKey: back
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Center
+- assertVisible: '60%'

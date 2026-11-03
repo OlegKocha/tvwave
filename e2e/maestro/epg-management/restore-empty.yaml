@@ -1,0 +1,77 @@
+appId: tv.tvwave.app.debug
+---
+- stopApp
+- launchApp
+- runFlow:
+    when:
+      visible:
+        id: "language:ru"
+    commands:
+      - tapOn:
+          id: "language:ru"
+- assertVisible: 'Ваши каналы — здесь'
+- pressKey: Remote Dpad Up
+- assertVisible:
+    id: add
+    focused: true
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Right
+- assertVisible:
+    id: welcome-settings
+    focused: true
+- pressKey: Remote Dpad Center
+- repeat:
+    times: 6
+    commands:
+      - pressKey: Remote Dpad Down
+- assertVisible:
+    id: backup
+    focused: true
+- pressKey: Remote Dpad Center
+- tapOn:
+    id: restore
+- tapOn:
+    id: file-downloads
+- tapOn:
+    text: 'TVWave'
+- assertVisible:
+    id: 'file:.*\.tvwavebackup'
+    focused: true
+- repeat:
+    while:
+      notVisible: 'qa-corrupt.tvwavebackup'
+    times: 20
+    commands:
+      - pressKey: Remote Dpad Down
+- tapOn:
+    text: 'qa-corrupt.tvwavebackup'
+- assertVisible: '.*Резервная копия повреждена.*'
+- assertNotVisible:
+    id: restore-apply
+- tapOn:
+    id: restore
+- tapOn:
+    id: file-downloads
+- tapOn: 'TVWave'
+- assertVisible:
+    id: 'file:.*\.tvwavebackup'
+    focused: true
+- repeat:
+    while:
+      notVisible: '${BACKUP_NAME}'
+    times: 20
+    commands:
+      - pressKey: Remote Dpad Down
+- tapOn:
+    text: '${BACKUP_NAME}'
+- assertVisible: 'Копия проверена'
+- assertVisible: '.*Плейлистов: 3.*'
+- assertVisible: '.*Источников EPG: 3.*'
+- takeScreenshot: restore-preview
+- tapOn:
+    id: restore-apply
+- assertVisible: 'Все каналы · 48'
+- stopApp
+- launchApp
+- assertVisible: 'Все каналы · 48'
+- takeScreenshot: restored-after-reinstall

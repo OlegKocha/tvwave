@@ -1,0 +1,40 @@
+appId: tv.tvwave.app.debug
+---
+- runFlow: ../open-epg.yaml
+- pressKey: back
+- pressKey: Remote Dpad Up
+- pressKey: Remote Dpad Center
+- pressKey: Remote Dpad Center
+- assertVisible: 'Тестовый плейлист'
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Center
+- assertVisible: 'Источник телепрограммы'
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Center
+- assertVisible: 'EPG 02'
+- pressKey: back
+- pressKey: back
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Center
+- repeat:
+    times: 4
+    commands:
+      - pressKey: Remote Dpad Down
+- assertVisible:
+    id: epg-matches
+    focused: true
+- pressKey: Remote Dpad Center
+- pressKey: Remote Dpad Center
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Center
+- pressKey: Remote Dpad Up
+- assertVisible:
+    id: epg-offset
+    focused: true
+- pressKey: Remote Dpad Center
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Center
+- assertVisible: '\+0 ч 30 мин'
+- takeScreenshot: channel-offset

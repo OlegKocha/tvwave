@@ -1,0 +1,46 @@
+appId: tv.tvwave.app.debug
+---
+# Precondition: e2e/open_archive_preview.py, playback paused at the start.
+- assertVisible:
+    id: player-pause
+    focused: true
+- assertVisible: "Запись"
+- pressKey: Remote Dpad Right
+- assertVisible:
+    id: player-forward
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: player-position
+    text: "01:.*"
+- pressKey: Remote Dpad Up
+- assertVisible:
+    id: player-timeline
+    focused: true
+- pressKey: Remote Dpad Center
+- pressKey: Remote Dpad Right
+- pressKey: Remote Dpad Right
+- pressKey: Remote Dpad Right
+- assertVisible:
+    id: player-position
+    text: "Перейти на 16:.*"
+- takeScreenshot: archive-seek-preview
+- pressKey: back
+- assertVisible:
+    id: player-position
+    text: "01:.*"
+- pressKey: Remote Dpad Center
+- pressKey: Remote Dpad Right
+- pressKey: Remote Dpad Right
+- pressKey: Remote Dpad Right
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: player-position
+    text: "16:.*"
+- assertNotVisible:
+    id: channel-browser
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: player-pause
+    focused: true
+- takeScreenshot: archive-hud-paused

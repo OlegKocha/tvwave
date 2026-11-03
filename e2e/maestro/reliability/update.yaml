@@ -1,0 +1,26 @@
+appId: tv.tvwave.app.debug
+---
+- repeat:
+    times: 11
+    commands:
+      - pressKey: Remote Dpad Down
+- assertVisible:
+    id: epg-update
+    focused: true
+- pressKey: Remote Dpad Center
+- extendedWaitUntil:
+    visible: '(?s)EPG 10 · 10/10.*100%.*обновлено, 16 передач'
+    timeout: 120000
+- extendedWaitUntil:
+    visible:
+      id: epg-update
+      focused: true
+    timeout: 120000
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: epg-interval
+    focused: true
+- pressKey: Remote Dpad Up
+- assertVisible:
+    id: epg-update
+    focused: true

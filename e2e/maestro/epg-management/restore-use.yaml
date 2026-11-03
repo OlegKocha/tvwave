@@ -1,0 +1,34 @@
+appId: tv.tvwave.app.debug
+---
+- runFlow: ../open-epg.yaml
+- repeat:
+    while:
+      notVisible:
+        id: epg-update
+        focused: true
+    times: 10
+    commands:
+      - pressKey: Remote Dpad Down
+- assertVisible:
+    id: epg-update
+    focused: true
+- pressKey: Remote Dpad Center
+- extendedWaitUntil:
+    visible: '(?s)EPG 02 · 3/3.*100%.*обновлено, 16 передач'
+    timeout: 30000
+- assertVisible: '48 из 48 · вручную 1'
+- stopApp
+- launchApp
+- assertVisible: 'Все каналы · 48'
+- assertVisible: 'Тестовая передача 3'
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Up
+- pressKey: Remote Dpad Center
+- extendedWaitUntil:
+    visible: 'Смотрим · Тестовый канал 3'
+    timeout: 15000
+- pressKey: Remote Dpad Center
+- extendedWaitUntil:
+    visible: 'Прямой эфир · 360p'
+    timeout: 10000
+- takeScreenshot: restored-playback

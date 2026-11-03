@@ -1,0 +1,24 @@
+appId: tv.tvwave.app.debug
+---
+- runFlow: ../open-epg.yaml
+- pressKey: back
+- pressKey: Remote Dpad Up
+- pressKey: Remote Dpad Center
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Center
+- pressKey: Remote Dpad Right
+- pressKey: Remote Dpad Center
+- tapOn:
+    id: choose-file
+- tapOn:
+    id: file-import
+- tapOn: 'qa-bad.m3u8'
+- assertVisible: '.*отсутствует заголовок.*'
+- tapOn:
+    id: choose-file
+- tapOn: 'qa-good.m3u8'
+- assertVisible:
+    id: source-add
+- tapOn:
+    id: source-add
+- assertVisible: 'Все каналы · 32'

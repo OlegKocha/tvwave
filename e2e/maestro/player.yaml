@@ -1,0 +1,32 @@
+appId: tv.tvwave.app.debug
+---
+- launchApp
+- assertVisible:
+    id: guide-brand
+# Explicitly enter remote mode after the preceding text-entry flow.
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Up
+- assertVisible:
+    id: guide
+    focused: true
+- pressKey: Remote Dpad Center
+- extendedWaitUntil:
+    visible: "Смотрим · Тестовый канал 1"
+    timeout: 15000
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: player-pause
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible: "Смотреть"
+- pressKey: Remote Dpad Center
+- extendedWaitUntil:
+    notVisible: "Избранное"
+    timeout: 10000
+- pressKey: Remote Dpad Center
+- assertVisible: "Субтитры"
+- pressKey: back
+- pressKey: back
+- assertVisible:
+    id: guide-brand
+- takeScreenshot: player-pass

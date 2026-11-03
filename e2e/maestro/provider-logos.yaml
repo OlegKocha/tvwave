@@ -1,0 +1,14 @@
+appId: tv.tvwave.app.debug
+---
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: 'channel-logo:${C1}'
+    timeout: 15000
+- extendedWaitUntil:
+    visible:
+      id: 'channel-logo:${C6}'
+    timeout: 15000
+- assertVisible:
+    id: 'channel-letter:${C2}'
+- takeScreenshot: real-provider-logos

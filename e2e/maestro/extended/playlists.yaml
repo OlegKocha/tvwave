@@ -1,0 +1,59 @@
+appId: tv.tvwave.app.debug
+---
+- runFlow: ../open-epg.yaml
+- pressKey: back
+- pressKey: Remote Dpad Up
+- pressKey: Remote Dpad Center
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: playlist-edit
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: source-add
+    focused: true
+- pressKey: Remote Dpad Up
+- assertVisible:
+    id: source-phone
+    focused: true
+- pressKey: Remote Dpad Up
+- assertVisible:
+    id: choose-file
+    focused: true
+- pressKey: Remote Dpad Up
+- assertVisible:
+    id: source-url
+    focused: true
+- pressKey: Remote Dpad Center
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Center
+- inputText: 'http://10.0.2.2:8765/playlist.m3u8'
+- hideKeyboard
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: source-add
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible: 'Все каналы · 16'
+- runFlow: ../open-epg.yaml
+- pressKey: back
+- pressKey: Remote Dpad Up
+- pressKey: Remote Dpad Center
+- pressKey: Remote Dpad Center
+- tapOn:
+    id: playlist-refresh
+- assertVisible: 'Плейлист обновлён: 16 каналов'
+- tapOn:
+    id: playlist-delete
+- tapOn:
+    id: delete-cancel
+- assertVisible:
+    id: playlist-edit
+- tapOn:
+    id: playlist-delete
+- tapOn:
+    id: playlist-delete-confirm
+- assertVisible:
+    id: add
+- assertNotVisible: 'Тестовый плейлист'

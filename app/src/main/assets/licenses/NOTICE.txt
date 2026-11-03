@@ -1,0 +1,16 @@
+TV Wave audio decoder dependency
+
+org.jellyfin.media3:media3-ffmpeg-decoder:1.9.0+1
+Prebuilt FFmpeg audio extension maintained by the Jellyfin project.
+The artifact POM declares GNU General Public License version 3 (GPL-3.0).
+The Media3 Java wrapper sources retain their Apache-2.0 notices.
+License texts are included alongside this notice.
+
+Upstream build source, pinned to the artifact tag:
+https://github.com/jellyfin/jellyfin-androidx-media/tree/v1.9.0%2B1
+Commit: af9ee4e26b2045e3ea6f2ebf4a18ac8ebfeae396
+Published Java sources:
+https://repo.maven.apache.org/maven2/org/jellyfin/media3/media3-ffmpeg-decoder/1.9.0+1/media3-ffmpeg-decoder-1.9.0+1-sources.jar
+
+TV Wave uses the extension as a fallback after Android platform audio decoders.
+This dependency does not change the hardware video decoding path.

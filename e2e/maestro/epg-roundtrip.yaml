@@ -1,0 +1,105 @@
+appId: tv.tvwave.app.debug
+env:
+  CYCLES: 3
+---
+- runFlow: open-epg.yaml
+- repeat:
+    times: ${CYCLES}
+    commands:
+      - pressKey: Remote Dpad Down
+      - assertVisible:
+          id: "epg-source:d0ab7c48-2416-3256-8cbc-4b265e4343d9"
+          focused: true
+      - pressKey: Remote Dpad Down
+      - assertVisible:
+          id: "epg-source:1d1fc48e-ad52-3a49-9d26-85deea11e19d"
+          focused: true
+      - pressKey: Remote Dpad Down
+      - assertVisible:
+          id: "epg-source:95132410-f0b4-3c4e-91ff-e3fd44bae40f"
+          focused: true
+      - pressKey: Remote Dpad Down
+      - assertVisible:
+          id: "epg-source:e20a39ca-8b47-3784-a7cd-9c8fe70e728e"
+          focused: true
+      - pressKey: Remote Dpad Down
+      - assertVisible:
+          id: "epg-source:6bad8369-d8c3-3cc4-af01-3d78bacba956"
+          focused: true
+      - pressKey: Remote Dpad Down
+      - assertVisible:
+          id: "epg-source:ad11732c-189b-31cb-a164-1cae30972c62"
+          focused: true
+      - pressKey: Remote Dpad Down
+      - assertVisible:
+          id: "epg-source:f7b0146b-1f64-3513-8f93-f29f1b7398bb"
+          focused: true
+      - pressKey: Remote Dpad Down
+      - assertVisible:
+          id: "epg-source:c68a3e39-ada1-3a5f-94a7-a7715e7235a3"
+          focused: true
+      - pressKey: Remote Dpad Down
+      - assertVisible:
+          id: "epg-source:f521db6a-9b97-389d-86c2-da96df9c2b08"
+          focused: true
+      - pressKey: Remote Dpad Down
+      - assertVisible:
+          id: "epg-matches"
+          focused: true
+      - pressKey: Remote Dpad Down
+      - assertVisible:
+          id: "epg-update"
+          focused: true
+      - pressKey: Remote Dpad Down
+      - assertVisible:
+          id: "epg-interval"
+          focused: true
+      - pressKey: Remote Dpad Up
+      - assertVisible:
+          id: "epg-update"
+          focused: true
+      - pressKey: Remote Dpad Up
+      - assertVisible:
+          id: "epg-matches"
+          focused: true
+      - pressKey: Remote Dpad Up
+      - assertVisible:
+          id: "epg-source:f521db6a-9b97-389d-86c2-da96df9c2b08"
+          focused: true
+      - pressKey: Remote Dpad Up
+      - assertVisible:
+          id: "epg-source:c68a3e39-ada1-3a5f-94a7-a7715e7235a3"
+          focused: true
+      - pressKey: Remote Dpad Up
+      - assertVisible:
+          id: "epg-source:f7b0146b-1f64-3513-8f93-f29f1b7398bb"
+          focused: true
+      - pressKey: Remote Dpad Up
+      - assertVisible:
+          id: "epg-source:ad11732c-189b-31cb-a164-1cae30972c62"
+          focused: true
+      - pressKey: Remote Dpad Up
+      - assertVisible:
+          id: "epg-source:6bad8369-d8c3-3cc4-af01-3d78bacba956"
+          focused: true
+      - pressKey: Remote Dpad Up
+      - assertVisible:
+          id: "epg-source:e20a39ca-8b47-3784-a7cd-9c8fe70e728e"
+          focused: true
+      - pressKey: Remote Dpad Up
+      - assertVisible:
+          id: "epg-source:95132410-f0b4-3c4e-91ff-e3fd44bae40f"
+          focused: true
+      - pressKey: Remote Dpad Up
+      - assertVisible:
+          id: "epg-source:1d1fc48e-ad52-3a49-9d26-85deea11e19d"
+          focused: true
+      - pressKey: Remote Dpad Up
+      - assertVisible:
+          id: "epg-source:d0ab7c48-2416-3256-8cbc-4b265e4343d9"
+          focused: true
+      - pressKey: Remote Dpad Up
+      - assertVisible:
+          id: "epg-source:aad22ede-3a09-3494-b4ad-20ef58a0cfae"
+          focused: true
+- takeScreenshot: epg-roundtrip-pass

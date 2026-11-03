@@ -1,0 +1,48 @@
+appId: tv.tvwave.app.debug
+---
+- runFlow: start-preview.yaml
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: player-pause
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible: "Смотреть"
+- pressKey: Remote Dpad Right
+- assertVisible:
+    id: player-subtitles
+    focused: true
+- pressKey: Remote Dpad Right
+- assertVisible:
+    id: player-favourite
+    focused: true
+- pressKey: Remote Dpad Right
+- assertVisible:
+    id: player-live
+    focused: true
+- pressKey: Remote Dpad Right
+- assertVisible:
+    id: player-live
+    focused: true
+- takeScreenshot: centred-hud-paused
+- pressKey: Remote Dpad Left
+- pressKey: Remote Dpad Left
+- assertVisible:
+    id: player-subtitles
+    focused: true
+- assertNotVisible:
+    id: channel-browser
+- pressKey: Remote Dpad Left
+- assertVisible:
+    id: player-pause
+    focused: true
+- assertNotVisible:
+    id: channel-browser
+- pressKey: Remote Dpad Left
+- assertVisible:
+    id: channel-browser
+- pressKey: back
+- assertVisible:
+    id: player-pause
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible: "Пауза"

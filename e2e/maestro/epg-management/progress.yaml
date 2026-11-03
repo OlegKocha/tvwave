@@ -1,0 +1,18 @@
+appId: tv.tvwave.app.debug
+---
+- runFlow: ../open-epg.yaml
+- repeat:
+    times: 4
+    commands:
+      - pressKey: Remote Dpad Down
+- assertVisible:
+    id: epg-update
+    focused: true
+- pressKey: Remote Dpad Center
+- extendedWaitUntil:
+    visible: '(?s)EPG 02 · 2/2.*100%.*обновлено, 16 передач'
+    timeout: 30000
+- assertVisible:
+    id: epg-update
+    focused: true
+- takeScreenshot: epg-progress-complete-130

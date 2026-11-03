@@ -1,0 +1,19 @@
+.gradle/
+.kotlin/
+**/build/
+local.properties
+*.jks
+*.keystore
+signing.properties
+
+e2e/fixtures/video.mp4
+
+# Private user content and distributable binaries stay outside source control.
+*.tvwavebackup
+*.apk
+.env
+.env.*
+.DS_Store
+
+# Backups created by previous releases.
+*.hometvbackup
