@@ -46,9 +46,9 @@ class Repository(context: Context) : SQLiteOpenHelper(context,"tvwave.db",null,8
     }
     @Synchronized fun schedule(channel:String,from:Long,to:Long,limit:Int=300,offsetMinutes:Int=0):List<Programme> =
         schedules.get(channel,from,to,limit,offsetMinutes){start,end,count->EpgCache.schedule(readableDatabase,channel,start,end,count,offsetMinutes)}
-    @Synchronized fun maintain(state:AppState,now:Long=System.currentTimeMillis(),compact:Boolean=false):Boolean {
+    @Synchronized fun maintain(state:AppState,now:Long=System.currentTimeMillis(),compact:Boolean=false,onFilter:()->Unit={}):Boolean {
         val cleaned=CacheMaintenance.clean(writableDatabase,state,now)
-        val changed=CacheMaintenance.filterSchedules(writableDatabase,state,force=cleaned)||cleaned
+        val changed=CacheMaintenance.filterSchedules(writableDatabase,state,force=cleaned,onStart=onFilter)||cleaned
         if(changed)schedules.clear()
         if(compact)runCatching{CacheMaintenance.compactIfUseful(writableDatabase)}
         return changed

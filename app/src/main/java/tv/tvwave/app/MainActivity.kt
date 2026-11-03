@@ -131,6 +131,7 @@ class MainActivity : ComponentActivity() {
     private var data by mutableStateOf(AppState())
     private var applying by mutableStateOf(false)
     private var loaded by mutableStateOf(false)
+    private var optimizingGuide by mutableStateOf(false)
     private var loadFailed by mutableStateOf(false)
     private val exitConfirmation=ExitConfirmation()
     private var exitHint by mutableStateOf(false)
@@ -258,7 +259,7 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             try { data=withContext(Dispatchers.IO){
                     val saved=stateLock.withLock{repository.load()}
-                    runCatching{CacheMaintenance.cleanAbandonedFiles(cacheDir,System.currentTimeMillis());stateLock.withLock{if(!EpgUpdateService.state.value.running)repository.maintain(saved,compact=true)}}
+                    runCatching{CacheMaintenance.cleanAbandonedFiles(cacheDir,System.currentTimeMillis());stateLock.withLock{if(!EpgUpdateService.state.value.running)repository.maintain(saved,compact=true,onFilter={runOnUiThread{if(saved.uiLanguage.isNotEmpty())L10n.select(saved.uiLanguage);optimizingGuide=true}})}}
                         .onFailure{android.util.Log.w("TVWave","Cache maintenance deferred",it)}
                     saved
                 };if(data.uiLanguage.isNotEmpty())L10n.select(data.uiLanguage);selectedChannel=data.last.ifEmpty{data.channels.firstOrNull()?.id.orEmpty()};loaded=true;applyTracks()
@@ -1187,7 +1188,7 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(screen,controls,playback,interaction,seekDraft,pendingProgramme,archiveEnded){if(screen=="player"&&controls&&playback=="playing"&&seekDraft==null&&pendingProgramme==null&&!archiveEnded){delay(3000);controls=false}}
             LaunchedEffect(message){if(message.isNotEmpty()&&screen in listOf("guide","player","details","browse")){delay(4500);message=""}}
             Box(Modifier.fillMaxSize().semantics{testTagsAsResourceId=true}.clipToBounds().background(T.bg).onPreviewKeyEvent{handleRemote(it.nativeKeyEvent)}.focusRequester(rootFocus).focusable()){
-                if(!loaded)Text(tr("opening_tv_wave"),Modifier.align(Alignment.Center),color=T.text,fontSize=T.title)
+                if(!loaded)Text(tr(if(optimizingGuide)"optimizing_programme_storage" else "opening_tv_wave"),Modifier.align(Alignment.Center).padding(T.safe).widthIn(max=640.dp),color=T.text,fontSize=T.title,textAlign=androidx.compose.ui.text.style.TextAlign.Center)
                 else {
                     val base=when(screen){"browse"->"player";"details"->"details";"guide","player"->screen;else->backgroundScreen}
                     val overlay=screen !in listOf("guide","player","browse","details")

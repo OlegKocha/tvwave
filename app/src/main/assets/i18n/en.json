@@ -205,6 +205,7 @@
     "playlist": "Playlist",
     "delete_playlist": "Delete playlist?",
     "opening_tv_wave": "Opening TV Wave…",
+    "optimizing_programme_storage": "Optimizing programme guide storage…\nThis may take a few minutes on the first launch.",
     "watching": "Watching · {p1}",
     "press_back_twice_to_exit": "Press Back twice to exit",
     "opening_legacy_backup_s": "Opening legacy backup · {p1} s",

@@ -31,9 +31,10 @@ object CacheMaintenance {
     }
     /** One-time pruning for existing installations, then alongside weekly cleanup.
      * The marker is committed with the deletion: interrupted migration retries safely. */
-    fun filterSchedules(db:SQLiteDatabase,state:AppState,force:Boolean=false):Boolean {
+    fun filterSchedules(db:SQLiteDatabase,state:AppState,force:Boolean=false,onStart:()->Unit={}):Boolean {
         val done=db.rawQuery("SELECT id FROM epg_storage_policy WHERE id=1",null).use{it.moveToFirst()}
         if(done&&!force)return false
+        onStart()
         db.beginTransaction()
         try {
             EpgCache.pruneUnused(db,state)

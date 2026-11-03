@@ -205,6 +205,7 @@
     "playlist": "Плейлист",
     "delete_playlist": "Удалить плейлист?",
     "opening_tv_wave": "Открываем TV Wave…",
+    "optimizing_programme_storage": "Оптимизируем телепрограмму…\nПри первом запуске это может занять несколько минут.",
     "watching": "Смотрим · {p1}",
     "press_back_twice_to_exit": "Для выхода нажмите назад два раза",
     "opening_legacy_backup_s": "Открываем старую копию · {p1} с",
