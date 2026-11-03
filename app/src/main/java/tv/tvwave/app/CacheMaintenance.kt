@@ -7,6 +7,7 @@ import java.io.File
 object CacheMaintenance {
     private const val MIB=1024L*1024
     fun create(db:SQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS epg_storage_policy (id INTEGER PRIMARY KEY)")
         db.execSQL("CREATE TABLE IF NOT EXISTS cache_maintenance (id INTEGER PRIMARY KEY, last_success INTEGER NOT NULL)")
     }
     fun lastSuccess(db:SQLiteDatabase):Long = db.rawQuery("SELECT last_success FROM cache_maintenance WHERE id=1",null).use {
@@ -16,8 +17,6 @@ object CacheMaintenance {
         if(!EpgRetention.due(lastSuccess(db),now))return false
         db.beginTransaction()
         try {
-            // Do not remove unmatched channels from active sources: manual EPG matching
-            // and source priority still need their catalogue and current programmes.
             val stored=db.rawQuery("SELECT source FROM guide_meta UNION SELECT source FROM guide_catalog UNION SELECT source FROM guide_programme UNION SELECT source FROM guide_link",null).use { c->
                 buildList { while(c.moveToNext())add(c.getString(0)) }
             }
@@ -28,6 +27,19 @@ object CacheMaintenance {
             db.execSQL("INSERT OR REPLACE INTO cache_maintenance VALUES (1,?)",arrayOf(now))
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
+        return true
+    }
+    /** One-time pruning for existing installations, then alongside weekly cleanup.
+     * The marker is committed with the deletion: interrupted migration retries safely. */
+    fun filterSchedules(db:SQLiteDatabase,state:AppState,force:Boolean=false):Boolean {
+        val done=db.rawQuery("SELECT id FROM epg_storage_policy WHERE id=1",null).use{it.moveToFirst()}
+        if(done&&!force)return false
+        db.beginTransaction()
+        try {
+            EpgCache.pruneUnused(db,state)
+            db.execSQL("INSERT OR IGNORE INTO epg_storage_policy VALUES (1)")
+            db.setTransactionSuccessful()
+        }finally{db.endTransaction()}
         return true
     }
     /** Only at startup before playback. Otherwise SQLite reuses free pages on import.

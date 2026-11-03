@@ -29,20 +29,22 @@ object EpgCache {
         for(t in listOf("epg_mapping","epg_programme","epg_meta"))db.execSQL("DROP TABLE IF EXISTS ${t}")
     }
     fun clear(db:SQLiteDatabase){for(t in listOf("guide_link","guide_catalog","guide_programme","guide_meta","guide_summary"))db.execSQL("DELETE FROM ${t}")}
-    fun stage(file:File,input:InputStream,channels:List<Channel>,source:EpgSource,now:Long,progress:(Int)->Unit,oldest:Long=EpgRetention.cutoff(now)):EpgImportResult {
+    fun stage(file:File,input:InputStream,channels:List<Channel>,source:EpgSource,now:Long,progress:(Int)->Unit,oldest:Long=EpgRetention.cutoff(now),state:AppState?=null):EpgImportResult {
         SQLiteDatabase.deleteDatabase(file);val db=SQLiteDatabase.openOrCreateDatabase(file,null)
         try{
             create(db);db.beginTransaction()
             val result=db.compileStatement("INSERT OR REPLACE INTO guide_programme VALUES (?,?,?,?,?,?)").use{s->
                 Epg.parse(input,channels,now,{p->s.clearBindings();s.bindString(1,source.id);s.bindString(2,p.epgId);s.bindLong(3,p.start);s.bindLong(4,p.end);s.bindString(5,p.title);s.bindString(6,p.description);s.executeInsert()},progress,{catalog->
                     db.compileStatement("INSERT OR REPLACE INTO guide_catalog VALUES (?,?,?,?,?)").use{q->catalog.forEach{c->q.clearBindings();q.bindString(1,source.id);q.bindString(2,c.id);q.bindString(3,c.names.firstOrNull()?:c.id);q.bindString(4,JSONArray(c.names).toString());q.bindString(5,c.icon);q.executeInsert()}}
-                },includeUnmatched=true,baseUrl=source.url,oldest=oldest)
+                },baseUrl=source.url,oldest=oldest,selectChannels={catalog->
+                    if(state!=null)EpgLinks.needed(state,source.id,catalog)else Epg.match(channels,catalog).values.toSet()
+                })
             }
             db.execSQL("UPDATE guide_programme SET end=COALESCE((SELECT MIN(n.start) FROM guide_programme n WHERE n.source=guide_programme.source AND n.epg=guide_programme.epg AND n.start>guide_programme.start),0) WHERE end=0")
             db.execSQL("DELETE FROM guide_programme WHERE end<=start")
             db.delete("guide_programme","end<=?",arrayOf(oldest.toString()))
             val count=db.rawQuery("SELECT COUNT(*) FROM guide_programme",null).use{it.moveToFirst();it.getInt(0)}
-            if(count==0)throw UserError(tr("no_programmes_with_a_known_end_time_in_xmltv"))
+            if(count==0&&result.programmes>0)throw UserError(tr("no_programmes_with_a_known_end_time_in_xmltv"))
             db.execSQL("INSERT INTO guide_meta VALUES (?,?,?)",arrayOf<Any>(source.id,source.url,now))
             updateSummary(db,source.id,tomorrowWindow(now))
             db.setTransactionSuccessful();return result.copy(programmes=count)
@@ -97,6 +99,22 @@ object EpgCache {
         for((id,b) in links(db))if(state.playlistEpgSources[owner[id]].let{it==null||it==b.source}&&id in ids&&b.source in sources&&catalogs[b.source].isNullOrEmpty()&&id !in state.epgBindings)resolved.getOrPut(id){b}
         db.delete("guide_link",null,null)
         db.compileStatement("INSERT INTO guide_link VALUES (?,?,?)").use{s->resolved.forEach{(id,b)->s.bindString(1,id);s.bindString(2,b.source);s.bindString(3,b.channel);s.executeInsert()}}
+    }
+    /** Caller owns the transaction. Never remove the full channel catalogue. */
+    fun pruneUnused(db:SQLiteDatabase,state:AppState){
+        db.execSQL("CREATE TEMP TABLE IF NOT EXISTS wanted_epg (source TEXT,epg TEXT,PRIMARY KEY(source,epg)) WITHOUT ROWID")
+        db.execSQL("DELETE FROM wanted_epg")
+        db.compileStatement("INSERT OR IGNORE INTO wanted_epg VALUES (?,?)").use{insert->
+            for(source in state.sources){
+                val catalog=catalog(db,source.id)
+                val wanted=if(catalog.isNotEmpty())EpgLinks.needed(state,source.id,catalog)else
+                    links(db).filterKeys{id->state.channels.any{it.id==id}}.values.filter{it.source==source.id}.map{it.channel}.toSet()
+                for(id in wanted){insert.bindString(1,source.id);insert.bindString(2,id);insert.executeInsert()}
+            }
+        }
+        db.execSQL("DELETE FROM guide_programme WHERE NOT EXISTS (SELECT 1 FROM wanted_epg w WHERE w.source=guide_programme.source AND w.epg=guide_programme.epg)")
+        db.execSQL("DELETE FROM guide_summary")
+        db.execSQL("DROP TABLE wanted_epg")
     }
     fun reconcile(db:SQLiteDatabase,state:AppState,reset:Boolean=false){
         if(reset)clear(db)

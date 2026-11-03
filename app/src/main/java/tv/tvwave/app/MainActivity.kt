@@ -1019,7 +1019,10 @@ class MainActivity : ComponentActivity() {
         LaunchedEffect(catalogQuery){scroll.scrollToItem(0)}
         LazyColumn(Modifier.weight(1f).padding(T.focusGap),state=scroll,verticalArrangement=Arrangement.spacedBy(T.tiny)){
             itemsIndexed(catalog,key={_,entry->entry.id}){i,entry->Setting(entry.names.firstOrNull()?:entry.id,"catalog:${entry.id}",if(data.epgBindings[matchTarget]==EpgBinding(matchSource,entry.id))"✓"else"",modifier=if(i==0)Modifier.focusRequester(first).focusProperties{up=search}else Modifier,subtitle=entry.id){work{
-                change{it.copy(epgBindings=it.epgBindings+(matchTarget to EpgBinding(matchSource,entry.id)))};epgRevision++;returnTo("epgMatchChannels")
+                change{it.copy(epgBindings=it.epgBindings+(matchTarget to EpgBinding(matchSource,entry.id)))}
+                val hasSchedule=withContext(Dispatchers.IO){repository.schedule(matchTarget,EpgRetention.cutoff(System.currentTimeMillis()),System.currentTimeMillis()+3*86400000L,1).isNotEmpty()}
+                if(!hasSchedule)updateEpg(data.sources.filter{it.id==matchSource})
+                epgRevision++;returnTo("epgMatchChannels")
             }}}
             if(catalog.isEmpty())item{Caption(if(matchCatalog.isEmpty())tr("the_catalogue_will_appear_after_updating_this_source")else tr("no_matches"))}
         }

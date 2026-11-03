@@ -54,13 +54,13 @@ object Epg {
         override fun read():Int=super.read().also{seen(if(it<0)0 else 1)}
         override fun read(b:ByteArray,off:Int,len:Int):Int=`in`.read(b,off,len).also{seen(it)}
     }
-    fun parse(input:InputStream,channels:List<Channel>,now:Long,onProgramme:(Programme)->Unit,onProgress:(Int)->Unit={},onCatalog:(List<EpgChannel>)->Unit={},includeUnmatched:Boolean=false,baseUrl:String="",oldest:Long=EpgRetention.cutoff(now)):EpgImportResult {
+    fun parse(input:InputStream,channels:List<Channel>,now:Long,onProgramme:(Programme)->Unit,onProgress:(Int)->Unit={},onCatalog:(List<EpgChannel>)->Unit={},includeUnmatched:Boolean=false,baseUrl:String="",oldest:Long=EpgRetention.cutoff(now),selectChannels:((List<EpgChannel>)->Set<String>)?=null):EpgImportResult {
         val probe=PushbackInputStream(BufferedInputStream(Bounded(input,MAX_COMPRESSED)),2)
         val a=probe.read();val b=probe.read();if(b>=0)probe.unread(b);if(a>=0)probe.unread(a)
         val xml=Bounded(if(a==0x1f&&b==0x8b)GZIPInputStream(probe,65536)else probe,MAX_XML)
         val definitions=mutableListOf<EpgChannel>();var mapping:Map<String,String>?=null;var wanted=emptySet<String>()
         var channelId="";var channelIcon="";var aliases=mutableListOf<String>();var pid="";var start:Long?=null;var end:Long?=null
-        var title="";var desc="";var capture="";var text=StringBuilder();var depth=0;var root=false;var rows=0;var seen=0
+        var title="";var desc="";var capture="";var text=StringBuilder();var depth=0;var root=false;var rows=0;var seen=0;var matchedSeen=0
         val handler=object:DefaultHandler2(){
             override fun resolveEntity(publicId:String?,systemId:String?)=InputSource(StringReader(""))
             override fun internalEntityDecl(name:String?,value:String?){throw UserError(tr("the_epg_contains_unsupported_xml_entities"))}
@@ -71,8 +71,9 @@ object Epg {
                     "channel"->{channelId=attrs.getValue("id").orEmpty().take(256);channelIcon="";aliases=mutableListOf()}
                     "icon"->if(depth==3&&channelId.isNotBlank()&&channelIcon.isEmpty())channelIcon=runCatching{SourceIO.url(attrs.getValue("src").orEmpty(),baseUrl)}.getOrDefault("")
                     "programme"->{
-                        if(mapping==null){mapping=match(channels,definitions);wanted=if(includeUnmatched)definitions.map{it.id}.toSet()else mapping!!.values.toSet();onCatalog(definitions)}
+                        if(mapping==null){mapping=match(channels,definitions);wanted=selectChannels?.invoke(definitions)?:if(includeUnmatched)definitions.map{it.id}.toSet()else mapping!!.values.toSet();onCatalog(definitions)}
                         pid=attrs.getValue("channel").orEmpty()
+                        if(pid in wanted)matchedSeen++
                         start=if(pid in wanted)time(attrs.getValue("start").orEmpty())else null
                         end=if(start!=null)time(attrs.getValue("stop").orEmpty())else null
                         title="";desc=""
@@ -104,8 +105,9 @@ object Epg {
             reader.parse(InputSource(xml))
             if(!root||definitions.isEmpty())throw UserError(tr("no_channel_list_in_xmltv"))
             val result=mapping?:match(channels,definitions)
-            if(result.isEmpty()&&!includeUnmatched)throw UserError(tr("the_epg_channels_could_not_be_matched_to_your_playlist"))
-            if(rows==0)throw UserError(tr("no_programmes_for_the_current_date_the_previous_cache_is_preserved"))
+            if(mapping==null)onCatalog(definitions)
+            if(result.isEmpty()&&!includeUnmatched&&selectChannels==null)throw UserError(tr("the_epg_channels_could_not_be_matched_to_your_playlist"))
+            if(rows==0&&(selectChannels==null||seen==0||matchedSeen>0))throw UserError(tr("no_programmes_for_the_current_date_the_previous_cache_is_preserved"))
             return EpgImportResult(result,rows)
         }catch(e:UserError){throw e}catch(e:Exception){throw UserError(tr("could_not_read_xmltv_the_file_is_damaged_or_the_download_was_interrupt"))}
         finally{xml.close()}

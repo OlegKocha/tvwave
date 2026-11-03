@@ -107,6 +107,7 @@ class EpgUpdateService:Service(){
         mutable.value=mutable.value.copy(running=true,sourceId=source.id,status=text)
         if(SystemClock.elapsedRealtime()-notified>1000){notified=SystemClock.elapsedRealtime();getSystemService(NotificationManager::class.java).notify(NOTIFICATION,notification(text))}
     }
+    private class SelectionChanged:Exception()
     private suspend fun runQueue(){
         mutable.value=mutable.value.copy(running=true)
         val began=SystemClock.elapsedRealtime()
@@ -123,6 +124,7 @@ class EpgUpdateService:Service(){
             val key=MessageDigest.getInstance("SHA-256").digest((source.id+"\n"+source.url).toByteArray()).joinToString(""){"%02x".format(it)}
             val dir=File(filesDir,"epg-work").apply{mkdirs()}
             val downloaded=File(dir,"${key}.complete");val partial=File(dir,"${key}.partial");val staged=File(dir,"${key}.db")
+            var retrySelection=false
             try{
                 val context=currentCoroutineContext()
                 val result=withContext(worker){
@@ -154,7 +156,7 @@ class EpgUpdateService:Service(){
                     Epg.Bounded(downloaded.inputStream(),Epg.MAX_COMPRESSED).use{input->
                         EpgCache.stage(staged,input,snapshot.channels,source,System.currentTimeMillis(),progress={count->
                             context.ensureActive();progress(source,"${label}\n${EpgProgress.processing(count,input.count,downloaded.length())}")
-                        },oldest=EpgRetention.storageCutoff(System.currentTimeMillis(),snapshot.epgOffsets.values))
+                        },oldest=EpgRetention.storageCutoff(System.currentTimeMillis(),snapshot.epgOffsets.values),state=snapshot)
                     }
                 }
                 currentCoroutineContext().ensureActive()
@@ -163,11 +165,19 @@ class EpgUpdateService:Service(){
                     Repository(this@EpgUpdateService).use{repo->
                         val latest=repo.load()
                         if(latest.sources.none{it.id==source.id&&it.url==source.url})throw UserError(tr("the_source_has_changed_update_it_again"))
+                        // A binding or playlist can change while the XML is being read.
+                        // Reuse the completed download if the new selection needs more rows.
+                        android.database.sqlite.SQLiteDatabase.openDatabase(staged.path,null,android.database.sqlite.SQLiteDatabase.OPEN_READONLY).use{db->
+                            val catalog=EpgCache.catalog(db,source.id)
+                            if(!EpgLinks.needed(snapshot,source.id,catalog).containsAll(EpgLinks.needed(latest,source.id,catalog)))throw SelectionChanged()
+                        }
                         repo.installEpg(staged,source,latest)
                     }
                 }}
                 mutable.value=mutable.value.copy(revision=mutable.value.revision+1,status=tr("100_updated_programmes", label, result.programmes))
                 android.util.Log.i("TVWaveEPG","source installed programmes=${result.programmes}")
+            }catch(_:SelectionChanged){
+                retrySelection=true
             }catch(e:Exception){
                 if(!currentCoroutineContext().isActive)throw CancellationException()
                 val error=if(e is UserError)e.message.orEmpty()else tr("could_not_update_the_guide_check_your_connection_and_available_storage")
@@ -175,6 +185,7 @@ class EpgUpdateService:Service(){
             }finally{
                 withContext(NonCancellable+worker){android.database.sqlite.SQLiteDatabase.deleteDatabase(staged);partial.delete()}
             }
+            if(retrySelection)continue
             // Retain a complete download only while work is pending (process death / interruption).
             withContext(worker){downloaded.delete()};removePending(id);completed++
         }
