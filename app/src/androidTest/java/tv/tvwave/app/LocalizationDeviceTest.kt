@@ -55,7 +55,6 @@ class LocalizationDeviceTest {
             shot("onboarding-ru")
             click("welcome-settings");click("appearance")
             node("font-size",true)
-            device.pressDPadDown();node("font-reset",true)
             device.pressDPadDown();node("appearance-language",true);device.pressDPadCenter()
             node("language:ru",true)
             device.pressDPadUp();node("language:en",true);device.pressDPadCenter()

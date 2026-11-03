@@ -147,8 +147,8 @@ class TvNavigationTest {
         val deadline=SystemClock.uptimeMillis()+5000
         while(Repository(ctx).use{it.load().fontPercent}!=130&&SystemClock.uptimeMillis()<deadline)SystemClock.sleep(50)
         Repository(ctx).use{repo->val state=repo.load();assertEquals(130,state.fontPercent);assertEquals(130,BackupFile.decode(BackupFile.encode(state)).fontPercent)}
-        down("font-reset");device.pressDPadCenter()
-        value(100,"font-reset");up("font-size")
+        down("appearance-language");up("font-size")
+        repeat(6){device.pressDPadLeft();value(125-it*5)}
         device.takeScreenshot(File(ctx.getExternalFilesDir(null),"font-100.png"))
     }
     @Test fun hudOccupiesOneThird(){

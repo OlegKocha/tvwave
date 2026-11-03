@@ -18,7 +18,7 @@ fun legacyEpgSource(url:String)=EpgSource(UUID.nameUUIDFromBytes(url.toByteArray
 data class AppState(
     val playlists: List<Playlist> = emptyList(), val favourites: Set<String> = emptySet(),
     val history: List<String> = emptyList(), val last: String = "", val large: Boolean = false,
-    val resume: Boolean = false, val audioLanguage: String = "ru", val subtitles: Boolean = false, val epgUrl:String="", val epgAutoUpdate:Boolean=true, val epgBackup:String="", val epgSources:List<EpgSource> = emptyList(), val epgBindings:Map<String,EpgBinding> = emptyMap(), val epgIntervalHours:Int=12, val fontPercent:Int=if(large)120 else 100,
+    val resume: Boolean = false, val audioLanguage: String = "ru", val subtitles: Boolean = false, val epgUrl:String="", val epgAutoUpdate:Boolean=true, val epgBackup:String="", val epgSources:List<EpgSource> = emptyList(), val epgBindings:Map<String,EpgBinding> = emptyMap(), val epgIntervalHours:Int=24, val fontPercent:Int=if(large)120 else 100,
     val playlistEpgSources:Map<String,String> = emptyMap(), val epgOffsets:Map<String,Int> = emptyMap(), val uiLanguage:String=""
 ) {
     val channels get() = playlists.flatMap { it.channels }
@@ -157,7 +157,7 @@ object StateCodec {
                 require(id in all&&obj.get(id) is Number);val minutes=obj.getInt(id)
                 require(obj.getDouble(id)==minutes.toDouble()&&minutes in -720..720&&minutes%30==0);offsets[id]=minutes
             }}
-            val interval=j.optInt("epgIntervalHours",12);require(interval in listOf(6,12,24))
+            val interval=j.optInt("epgIntervalHours",24);require(interval in listOf(6,12,24))
             val fontPercent=if(j.has("fontPercent")){require(j.get("fontPercent") is Number);j.getInt("fontPercent").also{require(j.getDouble("fontPercent")==it.toDouble()&&it in 60..130&&it%5==0)}}else if(j.getBoolean("large"))120 else 100
             // Old backups may contain programme caches. Read their configuration only.
             return AppState(playlists, refs("favourites",50000).toSet(), refs("history",30), last, j.getBoolean("large"),j.getBoolean("resume"),language,j.getBoolean("subtitles"),epgAutoUpdate=j.optBoolean("epgAutoUpdate",true),epgSources=sources,epgBindings=bindings,epgIntervalHours=interval,fontPercent=fontPercent,playlistEpgSources=playlistSources,epgOffsets=offsets,uiLanguage=uiLanguage)

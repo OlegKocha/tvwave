@@ -7,6 +7,15 @@ import java.nio.ByteBuffer
 import java.security.MessageDigest
 class ConfigurationTest {
     private fun playlist(n:Int):Playlist {val id=UUID.nameUUIDFromBytes("playlist$n".toByteArray()).toString();val raw="#EXTM3U\n#EXTINF:-1,Channel $n\nhttps://example.invalid/$n\n";return Playlist(id,"Playlist $n","",raw,M3u.parse(raw,id))}
+    @Test fun dailyEpgDefaultPreservesSavedIntervals() {
+        assertEquals(24,AppState().epgIntervalHours)
+        val old=JSONObject(String(StateCodec.encode(AppState()))).apply{remove("epgIntervalHours")}
+        assertEquals(24,StateCodec.decode(old.toString().toByteArray()).epgIntervalHours)
+        for(hours in listOf(6,12,24)) {
+            val state=AppState(epgIntervalHours=hours)
+            assertEquals(hours,BackupFile.decode(BackupFile.encode(state)).epgIntervalHours)
+        }
+    }
     @Test fun sourcesBindingsAndLimitsRoundtrip(){
         val lists=(1..15).map{playlist(it)};val sources=(1..10).map{legacyEpgSource("https://example.invalid/$it.xml")}
         val state=AppState(playlists=lists,epgSources=sources,epgBindings=mapOf(lists[0].channels[0].id to EpgBinding(sources[9].id,"manual")),epgIntervalHours=6)

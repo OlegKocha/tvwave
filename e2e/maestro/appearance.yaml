@@ -39,12 +39,15 @@ appId: tv.tvwave.app.debug
 - assertVisible: "130%"
 - pressKey: Remote Dpad Down
 - assertVisible:
-    id: font-reset
+    id: appearance-language
     focused: true
-- pressKey: Remote Dpad Center
-- assertVisible: "100%"
 - pressKey: Remote Dpad Up
 - assertVisible:
     id: font-size
     focused: true
+- repeat:
+    times: 6
+    commands:
+      - pressKey: Remote Dpad Left
+- assertVisible: "100%"
 - takeScreenshot: appearance-pass

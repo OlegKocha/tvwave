@@ -20,6 +20,8 @@ import android.provider.Settings
 import android.view.KeyEvent as AndroidKey
 import android.view.View
 import android.view.WindowManager
+import androidx.activity.viewModels
+import androidx.core.content.FileProvider
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -111,6 +113,16 @@ private val LocalPanelPage = staticCompositionLocalOf<String?> { null }
 
 @androidx.annotation.OptIn(markerClass = [androidx.media3.common.util.UnstableApi::class])
 class MainActivity : ComponentActivity() {
+    private val appUpdates by viewModels<AppUpdateViewModel>()
+    private var updateInstallBusy by mutableStateOf(false)
+    private var updateWindowFocusRevision by mutableIntStateOf(0)
+    private val updateInstaller = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        appUpdates.installerMessage(if(result.resultCode == RESULT_CANCELED) "update_cancelled" else null)
+    }
+    private val updatePermission = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        if(Build.VERSION.SDK_INT < 26 || packageManager.canRequestPackageInstalls()) installAppUpdate()
+        else appUpdates.installerMessage("update_permission_denied")
+    }
     private lateinit var repository: Repository
     private lateinit var player: ExoPlayer
     private lateinit var playbackDisplayMode:PlaybackDisplayMode
@@ -284,6 +296,10 @@ class MainActivity : ComponentActivity() {
     private fun updateKeepScreen() {
         if(playback in listOf("playing","buffering"))window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if(hasFocus)updateWindowFocusRevision++
     }
     override fun onStart(){super.onStart();playbackDisplayMode.setForeground(true);if(loaded&&!loadFailed)EpgUpdateService.resume(this)}
     override fun onStop(){ playbackDisplayMode.setForeground(false);cancelArchiveLoad();pausePlayback();exitConfirmation.reset();exitHint=false;super.onStop(); closePhone();cancelRecovery(); player.pause(); window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
@@ -893,8 +909,8 @@ class MainActivity : ComponentActivity() {
             if(data.sources.size<10)item{Setting(tr("add"),"epg-add",modifier=Modifier.focusRequester(requests.getValue("epg-add"))){editEpg()}}
             item{Setting(tr("channel_matching"),"epg-matches",subtitle=tr("of_manual", epgLinks.size, data.channels.size, data.epgBindings.size),modifier=if(data.sources.isEmpty())toInterval else Modifier.focusRequester(requests.getValue("epg-matches"))){matchQuery="";openPanel("epgMatchChannels")}}
             if(data.sources.isNotEmpty())item{
-                if(epgUpdating)Setting(tr("cancel_update"),"epg-cancel",modifier=toInterval){lifecycleScope.launch{EpgUpdateService.cancelAndWait(this@MainActivity)}}
-                else Setting(tr("update_now"),"epg-update",modifier=toInterval){updateEpg()}
+                if(epgUpdating)Action(tr("cancel_update"),key="epg-cancel",modifier=toInterval,enabled=!busy){lifecycleScope.launch{EpgUpdateService.cancelAndWait(this@MainActivity)}}
+                else Action(tr("update_now"),key="epg-update",modifier=toInterval,enabled=!busy){updateEpg()}
             }
         }
         HorizontalDivider(color=T.border)
@@ -1047,6 +1063,7 @@ class MainActivity : ComponentActivity() {
     }
     private fun programmeStatus(p:Programme)=when{p.start>nowTime->tr("up_next");p.end<=nowTime->tr("finished");else->tr("live_now")}
     private fun panelTitle(page:String)=when(page){
+        "updates"->tr("update_app")
         "epgOrder"->tr("guide_priority");"epgOffset"->tr("epg_time_offset");"playlistEpg"->tr("programme_guide_source");"phone"->tr("url_from_phone");"settings"->tr("settings");"playlists"->tr("playlists");"source"->if(editingPlaylist==null)tr("new_playlist")else tr("edit_playlist");"files"->tr("choose_file")
         "language"->tr("language");"appearance"->tr("appearance");"playback"->tr("playback");"audio"->tr("audio");"remote"->tr("remote_control")
         "startup"->tr("on_startup");"backup"->tr("backup");"restorePassword"->tr("legacy_backup");"restoreConfirm"->tr("restore_data")
@@ -1057,6 +1074,7 @@ class MainActivity : ComponentActivity() {
         "playlistMenu"->tr("playlist");"playlistDelete"->tr("delete_playlist");else->"TV Wave"
     }
     private fun defaultFocus(page:String=screen):String=when(page){
+        "updates"->"update-action"
         "epgOrder"->epgOrder.firstOrNull()?.let{"epg-move:${it.id}"}.orEmpty();"epgOffset"->"offset-reset";"playlistEpg"->"playlist-epg-auto";"phone"->"phone-close";"settings"->"playlists";"playlists"->data.playlists.firstOrNull()?.let{"playlist:${it.id}"}?:"add";"source"->if(candidate!=null)"source-add"else "source-url"
         "files"->files.firstOrNull()?.let{"file:${it.path}"}?:"file-up"
         "language"->"language:${L10n.language}";"appearance"->"font-size";"playback","audio"->"audio-language";"startup"->"resume";"backup"->if(loadFailed)"restore"else "export"
@@ -1440,6 +1458,7 @@ class MainActivity : ComponentActivity() {
                         "epgDelete"->{Caption(tr("this_source_and_its_matches_will_be_removed_your_playlists_will_be_kep"));Action(tr("cancel_m245"),key="delete-cancel"){back()};Action(tr("delete"),key="epg-delete-confirm",enabled=!busy){deleteEpg()}}
                         "playlistMenu"->PlaylistMenu()
                         "playlistDelete"->{Caption(tr("this_playlist_and_its_channels_will_be_removed_from_the_app"));Action(tr("cancel_m245"),key="delete-cancel"){back()};Action(tr("delete"),key="playlist-delete-confirm",enabled=!busy){deletePlaylist()}}
+                        "updates"->UpdateScreen()
                         "appearance"->AppearanceScreen()
                         "language"->LanguageOptions()
                         "playback","audio"->AudioScreen()
@@ -1454,10 +1473,9 @@ class MainActivity : ComponentActivity() {
         }
     }
     @Composable private fun AppearanceScreen(){
-        val resetFocus=remember{FocusRequester()}
+        val languageFocus=remember{FocusRequester()}
         val requester=remember{FocusRequester()};var focused by remember{mutableStateOf(false)}
         LaunchedEffect(Unit){delay(80);requester.requestFocus()}
-        Caption(tr("choose_a_size_you_can_comfortably_read_from_the_sofa"))
         Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween){
             Text(tr("font_size"),color=T.text,fontSize=T.body)
             Text("${fontPercent}%",Modifier.testTag("font-value"),color=T.accent,fontSize=T.body)
@@ -1475,19 +1493,21 @@ class MainActivity : ComponentActivity() {
                         if(key.action==AndroidKey.ACTION_UP)resizeText(fontPercent,true)
                         true
                     }else if(key.keyCode in listOf(AndroidKey.KEYCODE_DPAD_UP,AndroidKey.KEYCODE_DPAD_DOWN)){
-                        if(key.keyCode==AndroidKey.KEYCODE_DPAD_DOWN&&key.action==AndroidKey.ACTION_DOWN)resetFocus.requestFocus()
+                        if(key.keyCode==AndroidKey.KEYCODE_DPAD_DOWN&&key.action==AndroidKey.ACTION_DOWN)languageFocus.requestFocus()
                         true
                     }else false
                 }.semantics{contentDescription=tr("font_size");stateDescription="${fontPercent}%"})
-        Caption(tr("smaller_larger"))
-        Caption(tr("text_changes_immediately_this_setting_is_saved_automatically"))
-        Action(tr("default_100"),modifier=Modifier.focusRequester(resetFocus).onPreviewKeyEvent{event->
-            if(event.nativeKeyEvent.keyCode==AndroidKey.KEYCODE_DPAD_UP){
-                if(event.nativeKeyEvent.action==AndroidKey.ACTION_DOWN)requester.requestFocus()
-                true
-            }else false
-        },key="font-reset"){resizeText(100,true)}
-        Setting(tr("language"),"appearance-language",L10n.available.firstOrNull{it.locale==L10n.language}?.nativeName?:"English"){openPanel("language")}
+        Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween){
+            Caption(tr("font_smaller"))
+            Caption(tr("font_larger"))
+        }
+        Setting(tr("language"),"appearance-language",L10n.available.firstOrNull{it.locale==L10n.language}?.nativeName?:"English",
+            modifier=Modifier.focusRequester(languageFocus).onPreviewKeyEvent{event->
+                if(event.nativeKeyEvent.keyCode==AndroidKey.KEYCODE_DPAD_UP){
+                    if(event.nativeKeyEvent.action==AndroidKey.ACTION_DOWN)requester.requestFocus()
+                    true
+                }else false
+            }){openPanel("language")}
     }
     @Composable private fun LanguageOptions(firstLaunch:Boolean=false){
         val first=remember{FocusRequester()}
@@ -1513,6 +1533,95 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+    private fun installAppUpdate() {
+        if(updateInstallBusy)return
+        updateInstallBusy=true
+        lifecycleScope.launch {
+            try {
+                val file=appUpdates.verifiedFile()
+                if(Build.VERSION.SDK_INT>=26&&!packageManager.canRequestPackageInstalls()) {
+                    appUpdates.installerMessage("update_permission")
+                    updatePermission.launch(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,Uri.parse("package:$packageName")))
+                } else {
+                    val uri=FileProvider.getUriForFile(this@MainActivity,"$packageName.updates",file)
+                    @Suppress("DEPRECATION")
+                    val intent=Intent(Intent.ACTION_INSTALL_PACKAGE).setDataAndType(uri,"application/vnd.android.package-archive")
+                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION).putExtra(Intent.EXTRA_RETURN_RESULT,true)
+                    intent.clipData=android.content.ClipData.newRawUri("TV Wave update",uri)
+                    appUpdates.installerMessage(null)
+                    updateInstaller.launch(intent)
+                }
+            } catch(e:CancellationException){throw e}
+            catch(e:Exception){if(e is UpdateFailure)appUpdates.invalidateDownload(e.key)else appUpdates.installerMessage("update_no_installer")}
+            finally {updateInstallBusy=false}
+        }
+    }
+    @Composable private fun UpdateScreen() {
+        val state by appUpdates.state.collectAsState()
+        val updateActionFocus=remember{FocusRequester()}
+        val inputMode=androidx.compose.ui.platform.LocalInputModeManager.current
+        LaunchedEffect(state.phase,state.messageKey,screen,updateWindowFocusRevision) {
+            if(state.phase==UpdatePhase.READY&&screen=="updates"&&
+                lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)&&appUpdates.consumeAutoInstall())installAppUpdate()
+            if(screen=="updates"&&hasWindowFocus()) {
+                // System installer/settings may return in touch mode. Restore TV remote focus.
+                inputMode.requestInputMode(androidx.compose.ui.input.InputMode.Keyboard)
+                panelFocus["updates"]="update-action"
+                repeat(5) {
+                    delay(60)
+                    if(screen!="updates")return@LaunchedEffect
+                    if(runCatching{updateActionFocus.requestFocus()}.getOrDefault(false))return@LaunchedEffect
+                }
+            }
+        }
+        Caption(tr("update_installed",BuildConfig.VERSION_NAME),Modifier.testTag("update-version"))
+        val status=when(state.phase){
+            UpdatePhase.CHECKING->tr("update_checking")
+            UpdatePhase.CURRENT->tr("update_current")
+            UpdatePhase.AVAILABLE->tr("update_available",state.release?.version.orEmpty())
+            UpdatePhase.DOWNLOADING->tr("update_downloading",state.percent)
+            UpdatePhase.READY->tr(if(updateInstallBusy)"update_verifying"else"update_ready")
+            else->""
+        }
+        if(status.isNotEmpty())Text(status,Modifier.testTag("update-status"),color=T.text,fontSize=T.body)
+        if(state.phase==UpdatePhase.DOWNLOADING)LinearProgressIndicator(progress={state.percent/100f},modifier=Modifier.fillMaxWidth())
+        state.messageKey?.let{Text(tr(it),Modifier.testTag("update-message"),color=if(state.phase==UpdatePhase.ERROR)T.danger else T.muted,fontSize=T.caption)}
+        val running=state.phase in listOf(UpdatePhase.CHECKING,UpdatePhase.DOWNLOADING)
+        val label=when{
+            running->tr("cancel_m245")
+            state.phase==UpdatePhase.READY->tr("update_install")
+            state.release!=null->tr("update_download")
+            else->tr("update_check")
+        }
+        Action(label,modifier=Modifier.focusRequester(updateActionFocus),key="update-action",enabled=!updateInstallBusy){
+            when{
+                running->appUpdates.cancel()
+                state.phase==UpdatePhase.READY->installAppUpdate()
+                state.release!=null->appUpdates.download()
+                else->appUpdates.check()
+            }
+        }
+        if(state.release!=null&&!running)Action(tr("update_check_again"),key="update-recheck",enabled=!updateInstallBusy){appUpdates.check()}
+        state.release?.localizedNotes(L10n.language)?.takeIf{it.isNotBlank()}?.let { notes ->
+            Text(tr("update_notes"),color=T.text,fontSize=T.body,fontWeight=FontWeight.SemiBold)
+            val notesScroll=rememberScrollState()
+            val notesScope=rememberCoroutineScope()
+            var notesFocused by remember{mutableStateOf(false)}
+            Box(Modifier.fillMaxWidth().heightIn(max=T.settingRow*3).testTag("update-notes")
+                .border(T.focusLine,if(notesFocused)T.accent else Color.Transparent,RoundedCornerShape(T.radius))
+                .onFocusChanged{notesFocused=it.isFocused}
+                .onPreviewKeyEvent { event ->
+                    val key=event.nativeKeyEvent
+                    val step=when(key.keyCode){AndroidKey.KEYCODE_DPAD_DOWN->100;AndroidKey.KEYCODE_DPAD_UP->-100;else->0}
+                    if(key.action==AndroidKey.ACTION_DOWN&&step!=0&&
+                        (step>0&&notesScroll.value<notesScroll.maxValue||step<0&&notesScroll.value>0)){
+                        notesScope.launch{notesScroll.scrollTo((notesScroll.value+step).coerceIn(0,notesScroll.maxValue))};true
+                    }else false
+                }.focusable().padding(T.small)) {
+                Caption(notes,Modifier.verticalScroll(notesScroll))
+            }
+        }
+    }
     @Composable private fun SettingsScreen(){
         Setting(tr("playlists"),"playlists"){openPanel("playlists")}
         Setting(tr("programme_guides"),"epg"){openPanel("epg")}
@@ -1521,6 +1630,7 @@ class MainActivity : ComponentActivity() {
         Setting(tr("remote_control"),"remote"){openPanel("remote")}
         Setting(tr("on_startup"),"startup"){openPanel("startup")}
         Setting(tr("backup"),"backup"){openPanel("backup")}
+        Setting(tr("update_app"),"updates"){openPanel("updates")}
         Caption("TV Wave ${BuildConfig.VERSION_NAME}")
     }
     @Composable private fun PlaylistsScreen(){
@@ -1601,7 +1711,6 @@ class MainActivity : ComponentActivity() {
         Caption(tr("settings_playlists_epg_urls_and_manual_matches_programme_schedules_are"))
         if(!loadFailed)Setting(tr("create_backup"),"export",subtitle=tr("no_password_channels", data.channels.size)){if(!loadFailed)startExport()}
         Setting(tr("restore_from_file"),"restore"){chooseDocument("backup")}
-        Caption(tr("this_file_contains_your_iptv_urls_keep_it_private_copy_the_saved_backu"))
     }
     @Composable private fun RestorePassword(){
         Caption(tr("this_backup_was_created_by_an_older_version_with_a_password_new_backup"))
