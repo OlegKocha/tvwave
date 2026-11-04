@@ -4,6 +4,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -34,7 +35,7 @@ fun PlaybackHud(
     position:Long, duration:Long, available:Long, editing:Boolean,
     canRewind:Boolean, canForward:Boolean, canSeek:Boolean, subtitles:Boolean, favourite:Boolean,
     wanted:String, requests:MutableMap<String,FocusRequester>, onFocus:(String)->Unit,
-    onAction:(String)->Unit, archiveDays:Int=0
+    onAction:(String)->Unit, archiveDays:Int=0, health:PlaybackHealth=PlaybackHealth(), diagnosticsEnabled:Boolean=false
 ) {
     val compact=LocalDensity.current.fontScale>1.1f
     val progress=if(duration>0)position.toFloat()/duration else 0f
@@ -76,14 +77,26 @@ fun PlaybackHud(
                 HudButton("player-pause",playLabel,null,if(paused)"play"else"pause",true,false,wanted,requests,onFocus,onAction,true,showLabel=false)
                 HudButton("player-forward",tr("1_min_m366"),null,"forward",canForward,false,wanted,requests,onFocus,onAction,true,showLabel=false)
             }
+            Row(Modifier.align(Alignment.CenterEnd),verticalAlignment=Alignment.Top,horizontalArrangement=Arrangement.spacedBy(T.tiny)){
+            val bufferRequest=remember{FocusRequester()};var bufferFocused by remember{mutableStateOf(false)}
+            DisposableEffect(Unit){requests["player-buffer"]=bufferRequest;onDispose{requests.remove("player-buffer")}}
+            LaunchedEffect(wanted){if(wanted=="player-buffer")bufferRequest.requestFocus()}
+            Text(tr("buffer_summary",health.percent,health.seconds),Modifier.testTag("player-buffer").focusRequester(bufferRequest)
+                .onFocusChanged{bufferFocused=it.isFocused;if(it.isFocused)onFocus("player-buffer")}
+                .background(if(bufferFocused)T.accent else T.transparent,RoundedCornerShape(T.buttonRadius))
+                .border(if(bufferFocused)T.focusLine else 0.dp,if(bufferFocused)T.accent else T.transparent,RoundedCornerShape(T.buttonRadius))
+                .clickable(interactionSource=remember{MutableInteractionSource()},indication=null,role=Role.Button){onAction("player-buffer")}
+                .semantics{stateDescription=if(diagnosticsEnabled)tr("on")else tr("off")}.padding(T.small),
+                color=if(bufferFocused)T.onAccent else T.text,fontSize=T.hudLabel,lineHeight=T.hudLabel*1.2f,maxLines=1,
+                fontWeight=FontWeight.Normal)
             val request=remember{FocusRequester()};var hasFocus by remember{mutableStateOf(false)}
             DisposableEffect(Unit){requests["player-live"]=request;onDispose{requests.remove("player-live")}}
-            LaunchedEffect(wanted,live){if(wanted=="player-live"&&!live)request.requestFocus()}
-            Column(Modifier.align(Alignment.CenterEnd).testTag("player-live").focusRequester(request)
+            LaunchedEffect(wanted,live){if(wanted=="player-live")request.requestFocus()}
+            Column(Modifier.testTag("player-live").focusRequester(request)
                 .onFocusChanged{hasFocus=it.isFocused;if(it.isFocused)onFocus("player-live")}
                 .background(if(hasFocus)T.accent else T.transparent,RoundedCornerShape(T.buttonRadius))
                 .border(if(hasFocus)T.focusLine else 0.dp,if(hasFocus)T.accent else T.transparent,RoundedCornerShape(T.buttonRadius))
-                .clickable(enabled=!live,role=Role.Button){onAction("player-live")}.padding(T.small),
+                .clickable(role=Role.Button){onAction("player-live")}.padding(T.small),
                 horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(T.tiny)){
                 Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(T.small)){
                 Box(Modifier.size(T.hudDot).background(if(live)T.liveDot else if(hasFocus)T.onAccent else T.muted,CircleShape))
@@ -93,12 +106,33 @@ fun PlaybackHud(
                 Box(contentAlignment=Alignment.Center){
                     Text(tr("go_live_m367"),Modifier.alpha(if(hasFocus&&!live)1f else 0f).clearAndSetSemantics{},color=if(hasFocus)T.onAccent else T.text,fontSize=T.hudLabel,lineHeight=T.hudLabel*1.2f)
                     if(archiveDays>0&&!(hasFocus&&!live))Row(Modifier.testTag("player-archive-days"),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(T.tiny)){
-                        ArchiveIcon(T.muted,Modifier.size(T.hudIcon))
-                        Text(archiveDaysLabel(archiveDays),color=T.muted,fontSize=T.hudLabel,lineHeight=T.hudLabel*1.2f)
+                        ArchiveIcon(if(hasFocus)T.onAccent else T.muted,Modifier.size(T.hudIcon))
+                        Text(archiveDaysLabel(archiveDays),color=if(hasFocus)T.onAccent else T.muted,fontSize=T.hudLabel,lineHeight=T.hudLabel*1.2f)
                     }
                 }
             }
         }
+        }
+    }
+}
+
+@Composable
+fun PlaybackHealthPanel(health:PlaybackHealth,modifier:Modifier=Modifier){
+    fun rate(value:Float?)=value?.let{String.format(java.util.Locale.ROOT,"%.1f",it)}?:"—"
+    val codec=when(health.mime){"video/avc"->"H.264";"video/hevc"->"HEVC";"video/mpeg2"->"MPEG-2";"video/av01"->"AV1";"video/x-vnd.on2.vp9"->"VP9";else->health.mime?:"—"}
+    Column(modifier.testTag("player-diagnostics").background(T.surface.copy(alpha=.5f),RoundedCornerShape(T.radius)).padding(T.pad),verticalArrangement=Arrangement.spacedBy(T.small)){
+        Text(tr("playback_diagnostics"),color=T.text,fontSize=T.body,fontWeight=FontWeight.SemiBold)
+        val rows=listOf(
+            tr("buffer_label") to tr("buffer_value",health.percent,health.seconds),
+            tr("dropped_frames") to tr("frames_last_minute",health.droppedLastMinute),
+            tr("video_display_rate") to "${rate(health.fps)} FPS / ${rate(health.refreshHz)} Hz",
+            tr("decoder_label") to when(health.hardware){true->tr("hardware_decoder");false->tr("software_decoder");null->"—"},
+            tr("codec_label") to codec)
+        rows.forEach{(label,value)->Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(T.small)){
+            Text(label,Modifier.weight(1f),color=T.muted,fontSize=T.hudLabel)
+            Text(value,color=T.text,fontSize=T.hudLabel)
+        }}
+        Text(tr("buffer_target",health.targetMs/1000),color=T.muted,fontSize=T.hudLabel)
     }
 }
 

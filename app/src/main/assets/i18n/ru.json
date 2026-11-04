@@ -408,6 +408,18 @@
     "update_wrong_version": "В APK нет ожидаемой новой версии. Установка остановлена.",
     "update_wrong_signature": "Подпись APK не совпадает с установленным приложением. Установка остановлена.",
     "update_unsupported_android": "Для этого обновления нужна более новая версия Android.",
-    "update_check_again": "Проверить ещё раз"
+    "update_check_again": "Проверить ещё раз",
+    "buffer_summary": "Буфер {p1}% · {p2} сек",
+    "buffer_value": "{p1}% · {p2} сек",
+    "playback_diagnostics": "Диагностика",
+    "buffer_label": "Буфер",
+    "dropped_frames": "Пропуски кадров",
+    "frames_last_minute": "{p1} за минуту",
+    "video_display_rate": "Видео / экран",
+    "decoder_label": "Декодер",
+    "hardware_decoder": "Аппаратный",
+    "software_decoder": "Программный",
+    "codec_label": "Кодек",
+    "buffer_target": "Целевой запас буфера: {p1} сек"
   }
 }

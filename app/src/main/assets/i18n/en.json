@@ -408,6 +408,18 @@
     "update_wrong_version": "This APK does not contain the expected newer version. Installation was stopped.",
     "update_wrong_signature": "The APK signature does not match the installed app. Installation was stopped.",
     "update_unsupported_android": "This update needs a newer Android version.",
-    "update_check_again": "Check again"
+    "update_check_again": "Check again",
+    "buffer_summary": "Buffer {p1}% · {p2} s",
+    "buffer_value": "{p1}% · {p2} s",
+    "playback_diagnostics": "Playback diagnostics",
+    "buffer_label": "Buffer",
+    "dropped_frames": "Dropped frames",
+    "frames_last_minute": "{p1} in last minute",
+    "video_display_rate": "Video / display",
+    "decoder_label": "Decoder",
+    "hardware_decoder": "Hardware",
+    "software_decoder": "Software",
+    "codec_label": "Codec",
+    "buffer_target": "Buffer time target: {p1} s"
   }
 }

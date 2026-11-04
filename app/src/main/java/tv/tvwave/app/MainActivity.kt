@@ -192,6 +192,8 @@ class MainActivity : ComponentActivity() {
     private var archiveLoadJob:Job?=null
     private var archiveInitialPosition:Long?=null
     private var hudFocus by mutableStateOf("player-pause")
+    private lateinit var playbackDiagnostics:PlaybackDiagnostics
+    private var diagnosticsOpen by mutableStateOf(false)
     private var hudUtilityFocus="player-subtitles"
     private val recovery=PlaybackRecovery()
     private var recoveryJob:Job?=null
@@ -234,7 +236,7 @@ class MainActivity : ComponentActivity() {
         val renderers=DefaultRenderersFactory(this)
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
         player=ExoPlayer.Builder(this,renderers).setMediaSourceFactory(PlaybackSources(androidx.media3.datasource.DefaultDataSource.Factory(this,OkHttpDataSource.Factory(http).setUserAgent("TVWave/${BuildConfig.VERSION_NAME}"))).setLoadErrorHandlingPolicy(object:DefaultLoadErrorHandlingPolicy(0){override fun getRetryDelayMsFor(info:androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo)=C.TIME_UNSET})).build()
-        PlaybackDiagnostics(player,lifecycleScope)
+        playbackDiagnostics=PlaybackDiagnostics(player,lifecycleScope)
         playbackDisplayMode=PlaybackDisplayMode(this,player)
         player.setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(),true)
         player.addListener(object: Player.Listener {
@@ -530,7 +532,7 @@ class MainActivity : ComponentActivity() {
         add("player-pause")
         if(archiveSession!=null&&position<archiveSession!!.available(System.currentTimeMillis())-1000)add("player-forward")
         add("player-subtitles");add("player-favourite")
-        if(archiveSession!=null||!player.isPlaying)add("player-live")
+        add("player-buffer");add("player-live")
     }
     private fun hudAction(key:String) {
         interaction++
@@ -538,7 +540,8 @@ class MainActivity : ComponentActivity() {
             "player-pause"->togglePlayback()
             "player-rewind"->seekBy(-60000)
             "player-forward"->seekBy(60000)
-            "player-live"->returnToLive()
+            "player-live"->if(archiveSession!=null||!player.isPlaying)returnToLive()
+            "player-buffer"->{diagnosticsOpen=!diagnosticsOpen;controls=true}
             "player-timeline"->{
                 if(seekDraft!=null){val target=seekDraft!!;seekDraft=null;seekArchive(target)}
                 else{val p=archiveSession?.programme?:programme(playing?.id)?:return;seekDraft=if(archiveSession!=null)currentArchivePosition() else (System.currentTimeMillis()-p.start).coerceAtLeast(0)}
@@ -650,12 +653,12 @@ class MainActivity : ComponentActivity() {
                         if(delta<0&&index==0){selectedChannel=playing?.id?:filtered().firstOrNull()?.id.orEmpty();guideTime=0L;browseZone=0;panelStack.clear();screen="browse";controls=false}
                         else hudFocus=keys[(index+delta).coerceIn(0,keys.lastIndex)]
                     }
-                }else if(delta<0&&hudFocus=="player-live")hudFocus=hudUtilityFocus
+                }else if(delta<0&&hudFocus in listOf("player-live","player-buffer"))hudFocus=hudUtilityFocus
                 else if(delta>0&&hudFocus in listOf("player-subtitles","player-favourite")){
                     hudUtilityFocus=hudFocus
-                    if("player-live" in hudKeys())hudFocus="player-live"
+                    hudFocus=if(hudFocus=="player-subtitles")"player-buffer"else"player-live"
                 }else if(delta<0&&archiveSourceAvailable()&&(archiveSession?.programme?:programme(playing?.id))!=null)hudFocus="player-timeline"
-                else if(delta>0&&hudFocus!="player-live")hudFocus="player-pause"
+                else if(delta>0&&hudFocus !in listOf("player-live","player-buffer"))hudFocus="player-pause"
                 interaction++
             }
             return true
@@ -1185,7 +1188,7 @@ class MainActivity : ComponentActivity() {
             ArchiveDialogs()
             LaunchedEffect(exitHintRevision){if(exitHint){delay(ExitConfirmation.WINDOW_MS);exitHint=false;exitConfirmation.reset()}}
             LaunchedEffect(busy){busySeconds=0;while(busy){delay(1000);busySeconds++}}
-            LaunchedEffect(screen,controls,playback,interaction,seekDraft,pendingProgramme,archiveEnded){if(screen=="player"&&controls&&playback=="playing"&&seekDraft==null&&pendingProgramme==null&&!archiveEnded){delay(3000);controls=false}}
+            LaunchedEffect(screen,controls,playback,interaction,seekDraft,pendingProgramme,archiveEnded,diagnosticsOpen){if(screen=="player"&&controls&&playback=="playing"&&seekDraft==null&&pendingProgramme==null&&!archiveEnded){delay(3000);controls=false}}
             LaunchedEffect(message){if(message.isNotEmpty()&&screen in listOf("guide","player","details","browse")){delay(4500);message=""}}
             Box(Modifier.fillMaxSize().semantics{testTagsAsResourceId=true}.clipToBounds().background(T.bg).onPreviewKeyEvent{handleRemote(it.nativeKeyEvent)}.focusRequester(rootFocus).focusable()){
                 if(!loaded)Text(tr(if(optimizingGuide)"optimizing_programme_storage" else "opening_tv_wave"),Modifier.align(Alignment.Center).padding(T.safe).widthIn(max=640.dp),color=T.text,fontSize=T.title,textAlign=androidx.compose.ui.text.style.TextAlign.Center)
@@ -1872,6 +1875,16 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable private fun PlayerScreen(active:Boolean){
+        var health by remember{mutableStateOf(PlaybackHealth())}
+        LaunchedEffect(active,controls,diagnosticsOpen){
+            if(!active)diagnosticsOpen=false
+            while(active&&controls){
+                @Suppress("DEPRECATION")
+                val refresh=windowManager.defaultDisplay.refreshRate
+                health=playbackDiagnostics.snapshot(refresh)
+                delay(1000)
+            }
+        }
         val a=archiveSession
         val current=a?.programme?:programme(playing?.id)
         var liveNow by remember{mutableLongStateOf(System.currentTimeMillis())}
@@ -1898,9 +1911,10 @@ class MainActivity : ComponentActivity() {
                         a==null&&player.isPlaying,if(a!=null)tr("recording")else if(playback=="paused")tr("pause")else tr("not_live"),hudMinimum,if(recoveryJob?.isActive==true)tr("cancel")else if(playback in listOf("error","stopped"))tr("retry")else if(player.isPlaying)tr("pause")else tr("watch"),!player.isPlaying,
                         seekDraft?:position,duration,if(a!=null)a.available(System.currentTimeMillis())else available,seekDraft!=null,
                         canSeek&&position>0,forward,canSeek,
-                        data.subtitles,playing?.id in data.favourites,hudFocus,hudRequests,{hudFocus=it},::hudAction,archiveDays=channelArchiveDays(playing))
+                        data.subtitles,playing?.id in data.favourites,hudFocus,hudRequests,{hudFocus=it},::hudAction,archiveDays=channelArchiveDays(playing),health=health,diagnosticsEnabled=diagnosticsOpen)
                 }
             }
+            if(active&&controls&&diagnosticsOpen)PlaybackHealthPanel(health,Modifier.align(Alignment.TopEnd).padding(top=80.dp,end=T.safe).width(360.dp))
         }
     }
 }
