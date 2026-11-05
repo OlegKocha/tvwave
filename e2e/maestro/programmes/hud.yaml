@@ -2,10 +2,11 @@ appId: tv.tvwave.app.debug
 ---
 - runFlow: start-preview.yaml
 - pressKey: Remote Dpad Center
+# Keep the panel visible during Maestro idle waits, without overriding its timer.
+- pressKey: Remote Media Play Pause
 - assertVisible:
     id: player-pause
     focused: true
-- pressKey: Remote Dpad Center
 - assertVisible: "Смотреть"
 - pressKey: Remote Dpad Right
 - assertVisible:
@@ -17,6 +18,10 @@ appId: tv.tvwave.app.debug
     focused: true
 - pressKey: Remote Dpad Right
 - assertVisible:
+    id: player-buffer
+    focused: true
+- pressKey: Remote Dpad Right
+- assertVisible:
     id: player-live
     focused: true
 - pressKey: Remote Dpad Right
@@ -24,6 +29,10 @@ appId: tv.tvwave.app.debug
     id: player-live
     focused: true
 - takeScreenshot: centred-hud-paused
+- pressKey: Remote Dpad Left
+- assertVisible:
+    id: player-buffer
+    focused: true
 - pressKey: Remote Dpad Left
 - pressKey: Remote Dpad Left
 - assertVisible:
@@ -45,4 +54,7 @@ appId: tv.tvwave.app.debug
     id: player-pause
     focused: true
 - pressKey: Remote Dpad Center
-- assertVisible: "Пауза"
+- extendedWaitUntil:
+    notVisible:
+      id: player-hud
+    timeout: 10000

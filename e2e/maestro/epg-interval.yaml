@@ -10,8 +10,9 @@ appId: tv.tvwave.app.debug
     focused: true
 - pressKey: Remote Dpad Center
 - assertVisible:
-    id: "interval:12"
+    id: "interval:24"
     focused: true
+- pressKey: Remote Dpad Up
 - pressKey: Remote Dpad Up
 - pressKey: Remote Dpad Center
 - assertVisible: "6 ч"

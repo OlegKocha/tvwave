@@ -33,15 +33,24 @@ class AppUpdateViewModel(app: Application) : AndroidViewModel(app) {
         // APKs are disposable, never mixed with playlists/backups. Remove stale downloads.
         directory.listFiles()?.filter { System.currentTimeMillis() - it.lastModified() > 24 * 60 * 60 * 1000L }?.forEach { it.delete() }
     }
+    /** Forget a negative check on re-entry, but keep a discovered update until checked again. */
+    fun beginVisit() {
+        if (mutable.value.phase in listOf(UpdatePhase.DOWNLOADING, UpdatePhase.READY)) return
+        job?.cancel(); job = null
+        autoInstallPending = false
+        mutable.value = mutable.value.release?.let { AppUpdateState(UpdatePhase.AVAILABLE, it) } ?: AppUpdateState()
+    }
     fun check() {
         if (job?.isActive == true) return
-        mutable.value = AppUpdateState(UpdatePhase.CHECKING)
+        val previous = mutable.value.release
+        mutable.value = AppUpdateState(UpdatePhase.CHECKING, previous)
         job = viewModelScope.launch {
             try {
                 val release = client.check(BuildConfig.VERSION_NAME)
+                ensureActive()
                 mutable.value = AppUpdateState(if (release == null) UpdatePhase.CURRENT else UpdatePhase.AVAILABLE, release)
             } catch (e: CancellationException) { throw e }
-            catch (e: Exception) { ensureActive(); mutable.value = AppUpdateState(UpdatePhase.ERROR, messageKey = (e as? UpdateFailure)?.key ?: "update_network_error") }
+            catch (e: Exception) { ensureActive(); mutable.value = AppUpdateState(UpdatePhase.ERROR, previous, messageKey = (e as? UpdateFailure)?.key ?: "update_network_error") }
         }
     }
     fun download() {

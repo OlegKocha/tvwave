@@ -28,7 +28,11 @@ appId: tv.tvwave.app.debug
     visible: 'Смотрим · Тестовый канал 3'
     timeout: 15000
 - pressKey: Remote Dpad Center
+- pressKey: Remote Media Play Pause
 - extendedWaitUntil:
-    visible: 'Прямой эфир · 360p'
+    visible: '.*360p'
     timeout: 10000
+- assertVisible:
+    id: player-hud
+- assertVisible: 'Смотреть'
 - takeScreenshot: restored-playback

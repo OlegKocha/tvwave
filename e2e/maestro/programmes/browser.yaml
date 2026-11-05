@@ -2,6 +2,9 @@ appId: tv.tvwave.app.debug
 ---
 - runFlow: start-preview.yaml
 - pressKey: Remote Dpad Center
+# Pause through the media key so Maestro idle waits cannot outlast the HUD.
+# Live playback and the real three-second deadline are covered by HudNavigationTest.
+- pressKey: Remote Media Play Pause
 - assertVisible:
     id: player-pause
     focused: true
@@ -9,6 +12,7 @@ appId: tv.tvwave.app.debug
 - assertVisible:
     id: channel-browser
     focused: true
+- pressKey: Remote Media Play Pause
 - assertVisible:
     id: browse-title
     text: "Передача 0 · Канал 1"
@@ -54,6 +58,7 @@ appId: tv.tvwave.app.debug
     id: browse-title
     text: "Передача 0 · Канал 2"
 - pressKey: back
+- pressKey: Remote Media Play Pause
 - assertVisible:
     id: player-hud
 - assertNotVisible:

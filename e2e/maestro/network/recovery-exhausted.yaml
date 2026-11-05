@@ -11,8 +11,6 @@ appId: tv.tvwave.app.debug
       text: 'Связь с каналом прервалась.*'
     timeout: 90000
 - assertVisible: 'Повторить'
-- pressKey: Remote Dpad Right
-- pressKey: Remote Dpad Right
 - assertVisible:
     id: player-pause
     focused: true

@@ -50,6 +50,16 @@ class AppUpdateTest {
         assertEquals("Audio fix", release.localizedNotes("en"))
         assertEquals("Audio fix", release.localizedNotes("de"))
     }
+    @Test fun localizedReleaseNotesKeepCategoryHeadingsAndMetadata() {
+        val json=metadata().put("published_at","2026-11-04T10:00:00Z")
+            .put("body","## Русский\n### Новое\n- Первая функция\n## Улучшено\n- Работа пульта\n## English\n### New\n- First feature\n## Improved\n- Remote navigation")
+        val release=AppRelease.newer(json.toString(),"0.7.4")!!
+        assertEquals("2026-11-04T10:00:00Z",release.publishedAt)
+        assertTrue(release.localizedNotes("ru").contains("Улучшено\n- Работа пульта"))
+        assertFalse(release.localizedNotes("ru").contains("Remote navigation"))
+        assertTrue(release.localizedNotes("en").contains("Improved\n- Remote navigation"))
+        assertFalse(release.localizedNotes("en").contains("Первая функция"))
+    }
     @Test fun metadataErrorsDoNotPretendTheAppIsUpToDate() {
         failure("update_rate_limit") { runBlocking { client(403).check("0.7.4") } }
         failure("update_rate_limit") { runBlocking { client(429).check("0.7.4") } }

@@ -571,6 +571,7 @@ class MainActivity : ComponentActivity() {
         }
     }
     private fun openPanel(page:String) {
+        if(page=="updates"&&screen!=page)appUpdates.beginVisit()
         if(screen in listOf("guide","player")){backgroundScreen=screen;panelStack.clear()}
         else if(screen!=page)panelStack.add(screen)
         screen=page;error="";message=""
@@ -1070,7 +1071,7 @@ class MainActivity : ComponentActivity() {
     }
     private fun programmeStatus(p:Programme)=when{p.start>nowTime->tr("up_next");p.end<=nowTime->tr("finished");else->tr("live_now")}
     private fun panelTitle(page:String)=when(page){
-        "updates"->tr("update_app")
+        "updates"->tr("update_title")
         "epgOrder"->tr("guide_priority");"epgOffset"->tr("epg_time_offset");"playlistEpg"->tr("programme_guide_source");"phone"->tr("url_from_phone");"settings"->tr("settings");"playlists"->tr("playlists");"source"->if(editingPlaylist==null)tr("new_playlist")else tr("edit_playlist");"files"->tr("choose_file")
         "language"->tr("language");"appearance"->tr("appearance");"playback"->tr("playback");"audio"->tr("audio");"remote"->tr("remote_control")
         "startup"->tr("on_startup");"backup"->tr("backup");"restorePassword"->tr("legacy_backup");"restoreConfirm"->tr("restore_data")
@@ -1334,6 +1335,16 @@ class MainActivity : ComponentActivity() {
     }
     @Composable private fun Guide(active:Boolean){
         val visible=remember(data,group,query){filtered()};val list=rememberLazyListState();val root=remember{FocusRequester()}
+        val emptyAction=remember{FocusRequester()}
+        val inputMode=androidx.compose.ui.platform.LocalInputModeManager.current
+        val windowFocused=LocalWindowInfo.current.isWindowFocused
+        val empty=data.playlists.isEmpty()||loadFailed
+        LaunchedEffect(active,loaded,empty,loadFailed,windowFocused){
+            if(active&&loaded&&empty&&windowFocused){
+                inputMode.requestInputMode(androidx.compose.ui.input.InputMode.Keyboard)
+                repeat(5){delay(60);if(runCatching{emptyAction.requestFocus()}.getOrDefault(false))return@LaunchedEffect}
+            }
+        }
         val index=visible.indexOfFirst{it.id==selectedChannel}.coerceAtLeast(0);val selected=visible.getOrNull(index)
         LaunchedEffect(active,loaded){if(active&&loaded&&data.playlists.isNotEmpty()){delay(80);root.requestFocus()}}
         val rowHeight=(T.row+T.small)*maxOf(1f,LocalDensity.current.fontScale)
@@ -1356,8 +1367,8 @@ class MainActivity : ComponentActivity() {
                     Text(if(loadFailed)tr("data_recovery")else tr("your_channels_belong_here"),color=T.text,fontSize=T.display,fontWeight=FontWeight.SemiBold)
                     Caption(if(loadFailed)error else tr("add_a_playlist_by_url_file_or_qr_code_from_your_phone"))
                     Row(horizontalArrangement=Arrangement.spacedBy(T.gap)){
-                        if(!loadFailed)Action(tr("add_playlist"),key="add",enabled=active){newSource()}
-                        Action(tr("restore_backup"),key="restore",enabled=active){openPanel("backup")}
+                        if(!loadFailed)Action(tr("add_playlist"),Modifier.focusRequester(emptyAction),key="add",enabled=active){newSource()}
+                        Action(tr("restore_backup"),if(loadFailed)Modifier.focusRequester(emptyAction)else Modifier,key="restore",enabled=active){openPanel("backup")}
                     }
                     if(!loadFailed)Row(horizontalArrangement=Arrangement.spacedBy(T.gap)){
                         Action(tr("from_phone_via_qr"),key="welcome-phone",enabled=active&&!busy){newPhonePlaylist()}
@@ -1443,7 +1454,7 @@ class MainActivity : ComponentActivity() {
     }
     @Composable private fun BoxScope.Drawer(){
         val page=LocalPanelPage.current?:screen
-        Column(Modifier.align(Alignment.CenterEnd).fillMaxHeight().fillMaxWidth(if(page=="phone")T.phoneDrawerFraction else T.drawerFraction).background(T.surface)
+        Column(Modifier.align(Alignment.CenterEnd).fillMaxHeight().fillMaxWidth(if(page=="phone")T.phoneDrawerFraction else if(page=="updates").46f else T.drawerFraction).background(T.surface)
             .padding(start=T.pad,end=T.safe,top=T.drawerTop,bottom=T.drawerBottom),verticalArrangement=Arrangement.spacedBy(T.small)){
             Text(if(panelStack.isNotEmpty())panelTitle(panelStack.last()).uppercase(L10n.locale)else tr("tv_wave"),color=T.muted,fontSize=T.micro,lineHeight=T.micro*1.3f,maxLines=1,overflow=TextOverflow.Ellipsis)
             Text(panelTitle(page),color=T.text,fontSize=T.title,lineHeight=(T.title)*1.2f,fontWeight=FontWeight.SemiBold,maxLines=2,overflow=TextOverflow.Ellipsis)
@@ -1456,6 +1467,7 @@ class MainActivity : ComponentActivity() {
                 "epg" -> EpgSettings()
                 "epgMatchChannels" -> MatchChannels()
                 "epgMatchCatalog" -> MatchCatalog()
+                "updates" -> Column(Modifier.weight(1f).padding(T.focusGap),verticalArrangement=Arrangement.spacedBy(T.small)){UpdateScreen()}
                 else -> Column(Modifier.weight(1f).verticalScroll(remember(page){androidx.compose.foundation.ScrollState(0)}).padding(T.focusGap),verticalArrangement=Arrangement.spacedBy(T.tiny)){
                     if(page!="source")Notice()
                     when(page){
@@ -1465,7 +1477,6 @@ class MainActivity : ComponentActivity() {
                         "epgDelete"->{Caption(tr("this_source_and_its_matches_will_be_removed_your_playlists_will_be_kep"));Action(tr("cancel_m245"),key="delete-cancel"){back()};Action(tr("delete"),key="epg-delete-confirm",enabled=!busy){deleteEpg()}}
                         "playlistMenu"->PlaylistMenu()
                         "playlistDelete"->{Caption(tr("this_playlist_and_its_channels_will_be_removed_from_the_app"));Action(tr("cancel_m245"),key="delete-cancel"){back()};Action(tr("delete"),key="playlist-delete-confirm",enabled=!busy){deletePlaylist()}}
-                        "updates"->UpdateScreen()
                         "appearance"->AppearanceScreen()
                         "language"->LanguageOptions()
                         "playback","audio"->AudioScreen()
@@ -1534,7 +1545,12 @@ class MainActivity : ComponentActivity() {
                     work{
                         change{it.copy(uiLanguage=pack.locale)}
                         error="";message=""
-                        if(!firstLaunch){screen=if(panelStack.isNotEmpty())panelStack.removeAt(panelStack.lastIndex)else "appearance";panelFocus["appearance"]="appearance-language"}else {panelStack.clear();screen="guide"}
+                        if(!firstLaunch){screen=if(panelStack.isNotEmpty())panelStack.removeAt(panelStack.lastIndex)else "appearance";panelFocus["appearance"]="appearance-language"}else {
+                            // First-launch language actions share the guide page. Their
+                            // focus key must not survive into the empty-playlist screen.
+                            panelFocus.remove("guide")
+                            panelStack.clear();screen="guide"
+                        }
                     }
                 }
             }
@@ -1563,9 +1579,12 @@ class MainActivity : ComponentActivity() {
             finally {updateInstallBusy=false}
         }
     }
-    @Composable private fun UpdateScreen() {
+    @Composable private fun ColumnScope.UpdateScreen() {
         val state by appUpdates.state.collectAsState()
         val updateActionFocus=remember{FocusRequester()}
+        val notesFocus=remember{FocusRequester()}
+        val recheckFocus=remember{FocusRequester()}
+        var recheckFocused by remember{mutableStateOf(false)}
         val inputMode=androidx.compose.ui.platform.LocalInputModeManager.current
         LaunchedEffect(state.phase,state.messageKey,screen,updateWindowFocusRevision) {
             if(state.phase==UpdatePhase.READY&&screen=="updates"&&
@@ -1582,10 +1601,11 @@ class MainActivity : ComponentActivity() {
             }
         }
         Caption(tr("update_installed",BuildConfig.VERSION_NAME),Modifier.testTag("update-version"))
+        state.release?.let{UpdateReleaseBanner(it)}
         val status=when(state.phase){
             UpdatePhase.CHECKING->tr("update_checking")
             UpdatePhase.CURRENT->tr("update_current")
-            UpdatePhase.AVAILABLE->tr("update_available",state.release?.version.orEmpty())
+            UpdatePhase.AVAILABLE->""
             UpdatePhase.DOWNLOADING->tr("update_downloading",state.percent)
             UpdatePhase.READY->tr(if(updateInstallBusy)"update_verifying"else"update_ready")
             else->""
@@ -1594,13 +1614,14 @@ class MainActivity : ComponentActivity() {
         if(state.phase==UpdatePhase.DOWNLOADING)LinearProgressIndicator(progress={state.percent/100f},modifier=Modifier.fillMaxWidth())
         state.messageKey?.let{Text(tr(it),Modifier.testTag("update-message"),color=if(state.phase==UpdatePhase.ERROR)T.danger else T.muted,fontSize=T.caption)}
         val running=state.phase in listOf(UpdatePhase.CHECKING,UpdatePhase.DOWNLOADING)
+        val canRecheck=state.release!=null&&!running
         val label=when{
             running->tr("cancel_m245")
             state.phase==UpdatePhase.READY->tr("update_install")
-            state.release!=null->tr("update_download")
+            state.release!=null->tr("update_now_action")
             else->tr("update_check")
         }
-        Action(label,modifier=Modifier.focusRequester(updateActionFocus),key="update-action",enabled=!updateInstallBusy){
+        Action(label,modifier=Modifier.fillMaxWidth().focusRequester(updateActionFocus).focusProperties{if(canRecheck)down=recheckFocus else if(state.release?.notes?.isNotBlank()==true)down=notesFocus},key="update-action",enabled=!updateInstallBusy){
             when{
                 running->appUpdates.cancel()
                 state.phase==UpdatePhase.READY->installAppUpdate()
@@ -1608,27 +1629,23 @@ class MainActivity : ComponentActivity() {
                 else->appUpdates.check()
             }
         }
-        if(state.release!=null&&!running)Action(tr("update_check_again"),key="update-recheck",enabled=!updateInstallBusy){appUpdates.check()}
+        if(canRecheck)Text(tr("update_check"),Modifier.fillMaxWidth().testTag("update-recheck")
+            .focusRequester(recheckFocus).focusProperties{up=updateActionFocus;if(state.release?.notes?.isNotBlank()==true)down=notesFocus}
+            .onFocusChanged{recheckFocused=it.isFocused;if(it.isFocused)panelFocus["updates"]="update-recheck"}
+            .then(focusSurface(recheckFocused,T.surface))
+            .clickable(enabled=!updateInstallBusy,interactionSource=remember{MutableInteractionSource()},indication=null,role=Role.Button){appUpdates.check()}
+            .heightIn(min=32.dp).padding(horizontal=T.small,vertical=T.tiny),
+            color=if(recheckFocused)T.onAccent else T.text,fontSize=T.caption,lineHeight=T.caption*1.3f)
         state.release?.localizedNotes(L10n.language)?.takeIf{it.isNotBlank()}?.let { notes ->
-            Text(tr("update_notes"),color=T.text,fontSize=T.body,fontWeight=FontWeight.SemiBold)
-            val notesScroll=rememberScrollState()
-            val notesScope=rememberCoroutineScope()
-            var notesFocused by remember{mutableStateOf(false)}
-            Box(Modifier.fillMaxWidth().heightIn(max=T.settingRow*3).testTag("update-notes")
-                .border(T.focusLine,if(notesFocused)T.accent else Color.Transparent,RoundedCornerShape(T.radius))
-                .onFocusChanged{notesFocused=it.isFocused}
-                .onPreviewKeyEvent { event ->
-                    val key=event.nativeKeyEvent
-                    val step=when(key.keyCode){AndroidKey.KEYCODE_DPAD_DOWN->100;AndroidKey.KEYCODE_DPAD_UP->-100;else->0}
-                    if(key.action==AndroidKey.ACTION_DOWN&&step!=0&&
-                        (step>0&&notesScroll.value<notesScroll.maxValue||step<0&&notesScroll.value>0)){
-                        notesScope.launch{notesScroll.scrollTo((notesScroll.value+step).coerceIn(0,notesScroll.maxValue))};true
-                    }else false
-                }.focusable().padding(T.small)) {
-                Caption(notes,Modifier.verticalScroll(notesScroll))
+            HorizontalDivider(color=T.border)
+            Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween){
+                Text(tr("update_notes"),color=T.text,fontSize=T.body,fontWeight=FontWeight.SemiBold)
+                Text("GitHub",color=T.muted,fontSize=T.micro)
             }
-        }
+            UpdateReleaseNotes(notes,Modifier.weight(1f).fillMaxWidth(),notesFocus,if(canRecheck)recheckFocus else updateActionFocus)
+        } ?: Spacer(Modifier.weight(1f))
     }
+
     @Composable private fun SettingsScreen(){
         Setting(tr("playlists"),"playlists"){openPanel("playlists")}
         Setting(tr("programme_guides"),"epg"){openPanel("epg")}

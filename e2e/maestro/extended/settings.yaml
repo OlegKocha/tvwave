@@ -11,6 +11,8 @@ appId: tv.tvwave.app.debug
     id: audio-language
     focused: true
 - pressKey: Remote Dpad Center
+- assertVisible: 'Английский'
+- pressKey: Remote Dpad Center
 - assertVisible: 'Исходный'
 - pressKey: Remote Dpad Down
 - pressKey: Remote Dpad Center

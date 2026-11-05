@@ -2,11 +2,22 @@ appId: tv.tvwave.app.debug
 ---
 - runFlow: ../programmes/start-preview.yaml
 - pressKey: Remote Dpad Center
+- pressKey: Remote Media Play Pause
+# Channel stepping is active with the HUD hidden.
+- pressKey: back
+- pressKey: Remote Dpad Down
+- pressKey: Remote Media Play Pause
+- assertVisible: 'Тестовый канал 2'
+- pressKey: back
+- pressKey: Remote Dpad Down
+- pressKey: Remote Media Play Pause
+- assertVisible: 'Тестовый канал 3'
+- pressKey: Remote Dpad Right
+- pressKey: Remote Dpad Right
+- assertVisible:
+    id: player-favourite
+    focused: true
 - pressKey: Remote Dpad Center
-- pressKey: Remote Dpad Down
-- assertVisible: 'Тестовый канал 2   В эфире'
-- pressKey: Remote Dpad Down
-- assertVisible: 'Тестовый канал 3   В эфире'
 - pressKey: back
 - pressKey: back
 - pressKey: back

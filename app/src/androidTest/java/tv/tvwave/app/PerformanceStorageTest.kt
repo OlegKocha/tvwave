@@ -63,7 +63,7 @@ class PerformanceStorageTest {
             db.execSQL("DROP TABLE viewing_state");db.execSQL("DROP TABLE guide_summary");db.version=6
         }
         Repository(ctx).use{repo->
-            assertEquals(old,repo.load());assertEquals(7,repo.readableDatabase.version)
+            assertEquals(old,repo.load());assertEquals(8,repo.readableDatabase.version)
             assertTrue(EpgCache.status(repo.readableDatabase,old.sources[0]).programmes>0)
             val next=old.copy(last=old.channels[4].id,history=listOf(old.channels[4].id)+old.history)
             repo.saveViewing(next.last,next.history.distinct())
@@ -78,7 +78,8 @@ class PerformanceStorageTest {
             EpgCache.create(db);CacheMaintenance.create(db)
             db.execSQL("INSERT INTO guide_meta VALUES (?,?,?)",arrayOf<Any>(source.id,source.url,now))
             db.execSQL("INSERT INTO guide_catalog VALUES (?,'one','One','[\"One\"]','')",arrayOf(source.id))
-            for((start,end,title) in listOf(Triple(now-5*86400000,now-4*86400000,"old"),Triple(now+86400000,now+86400000+3600000,"tomorrow")))
+            val expiredEnd=EpgRetention.cutoff(now)-1
+            for((start,end,title) in listOf(Triple(expiredEnd-3600000,expiredEnd,"old"),Triple(now+86400000,now+86400000+3600000,"tomorrow")))
                 db.execSQL("INSERT INTO guide_programme VALUES (?,'one',?,?,?,'Description')",arrayOf<Any>(source.id,start,end,title))
             val first=EpgCache.status(db,source,now);assertEquals(2,first.programmes);assertTrue(first.tomorrow)
             // A warm status / refresh check must not touch the programme table at all.

@@ -21,9 +21,9 @@ data class AppVersion(private val parts: List<BigInteger>) : Comparable<AppVersi
     }
 }
 
-data class AppRelease(val version: String, val notes: String, val apkUrl: String, val size: Long, val sha256: String) {
+data class AppRelease(val version: String, val notes: String, val apkUrl: String, val size: Long, val sha256: String, val publishedAt: String = "") {
     fun localizedNotes(language: String): String {
-        val sections = notes.split(Regex("(?m)^## +"))
+        val sections = notes.split(Regex("(?mi)^## +(?=Русский\\s*$|English\\s*$)"))
         val label = if (language == "ru") "Русский" else "English"
         val selected = sections.firstOrNull { it.lineSequence().first().trim().equals(label, true) }
             ?: sections.firstOrNull { it.lineSequence().first().trim().equals("English", true) }
@@ -53,7 +53,7 @@ data class AppRelease(val version: String, val notes: String, val apkUrl: String
             if (asset.optString("state") != "uploaded" || size !in 1..MAX_APK_BYTES ||
                 url != "https://github.com/OlegKocha/tvwave/releases/download/$tag/tvwave.apk" ||
                 !digest.matches(Regex("sha256:[a-f0-9]{64}"))) throw UpdateFailure("update_invalid_release")
-            return AppRelease(tag.removePrefix("v"), root.optString("body"), url, size, digest.removePrefix("sha256:"))
+            return AppRelease(tag.removePrefix("v"), root.optString("body"), url, size, digest.removePrefix("sha256:"), root.optString("published_at"))
         }
     }
 }

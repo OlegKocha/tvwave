@@ -7,10 +7,6 @@ appId: tv.tvwave.app.debug
     visible:
       id: 'channel-logo:${C1}'
     timeout: 15000
-- extendedWaitUntil:
-    visible:
-      id: 'channel-logo:${C6}'
-    timeout: 15000
 - assertVisible:
     id: 'channel-letter:${C2}'
 - assertVisible:
@@ -20,10 +16,17 @@ appId: tv.tvwave.app.debug
 - assertVisible:
     id: 'channel-letter:${C5}'
 - takeScreenshot: logos-and-fallbacks
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Up
 - repeat:
-    times: 6
+    times: 5
     commands:
       - pressKey: Remote Dpad Down
+- extendedWaitUntil:
+    visible:
+      id: 'channel-logo:${C6}'
+    timeout: 15000
+- pressKey: Remote Dpad Down
 - assertVisible:
     id: 'channel-letter:${C7}'
 - repeat:
@@ -37,6 +40,7 @@ appId: tv.tvwave.app.debug
     visible: 'Смотрим · Тестовый канал 1'
     timeout: 15000
 - pressKey: Remote Dpad Center
+- pressKey: Remote Media Play Pause
 - pressKey: Remote Dpad Left
 - assertVisible:
     id: channel-browser

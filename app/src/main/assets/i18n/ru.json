@@ -393,7 +393,7 @@
     "update_ready": "Обновление скачано и проверено.",
     "update_install": "Установить обновление",
     "update_verifying": "Проверяем APK…",
-    "update_notes": "Что нового",
+    "update_notes": "Изменения",
     "update_permission": "Разрешите TV Wave устанавливать обновления, затем вернитесь сюда и выберите «Установить обновление».",
     "update_permission_denied": "Разрешение на установку не выдано. Нажмите «Установить обновление», чтобы попробовать ещё раз.",
     "update_no_installer": "Не удалось открыть установщик Android. Попробуйте установить APK через файловый менеджер.",
@@ -420,6 +420,9 @@
     "hardware_decoder": "Аппаратный",
     "software_decoder": "Программный",
     "codec_label": "Кодек",
-    "buffer_target": "Целевой запас буфера: {p1} сек"
+    "buffer_target": "Целевой запас буфера: {p1} сек",
+    "update_now_action": "Обновить",
+    "update_release_available": "Доступна новая версия",
+    "update_title": "Обновление TV Wave"
   }
 }

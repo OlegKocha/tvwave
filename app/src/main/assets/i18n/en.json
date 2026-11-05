@@ -393,7 +393,7 @@
     "update_ready": "The update is downloaded and verified.",
     "update_install": "Install update",
     "update_verifying": "Verifying the APK…",
-    "update_notes": "What’s new",
+    "update_notes": "Changes",
     "update_permission": "Allow TV Wave to install updates, then return here and select Install update.",
     "update_permission_denied": "Installation permission has not been granted. Select Install update to try again.",
     "update_no_installer": "The device could not open the Android installer. Try installing the APK from a file manager.",
@@ -420,6 +420,9 @@
     "hardware_decoder": "Hardware",
     "software_decoder": "Software",
     "codec_label": "Codec",
-    "buffer_target": "Buffer time target: {p1} s"
+    "buffer_target": "Buffer time target: {p1} s",
+    "update_now_action": "Update",
+    "update_release_available": "A new version is available",
+    "update_title": "TV Wave updates"
   }
 }
