@@ -47,7 +47,7 @@ object L10n {
 fun tr(key:String,vararg args:Any?):String=L10n.text(key,*args)
 
 class TvWaveApplication:Application() {
-    override fun onCreate(){super.onCreate();L10n.initialize(this)}
+    override fun onCreate(){super.onCreate();L10n.initialize(this);UpdateCache.cleanAsync(this)}
 }
 
 /** Stable existing values are retained for saved playlists and focus keys. */
