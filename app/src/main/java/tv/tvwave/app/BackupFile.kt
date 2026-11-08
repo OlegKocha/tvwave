@@ -5,12 +5,15 @@ import java.security.MessageDigest
 
 /** Compressed, configuration-only v3. Reads legacy password-free v2. SHA-256 detects accidental damage, not malicious changes. */
 object BackupFile {
+    const val EXTENSION="tvwb"
+    fun accepts(name:String)=name.substringAfterLast('.', "").lowercase(java.util.Locale.ROOT) in setOf(EXTENSION,"tvwavebackup",LegacyBackup.EXTENSION)
     private val magic = "TVWAVBK3".toByteArray(Charsets.US_ASCII)
     private val v2 = LegacyBackup.V2
     private val legacy = LegacyBackup.V1
     private const val HEADER = 48
     fun needsPassword(bytes: ByteArray) = bytes.size >= 8 && bytes.copyOfRange(0,8).contentEquals(legacy)
     fun encode(state: AppState): ByteArray {
+        // AppState includes watched channels, but never device-local search queries.
         val payload = java.io.ByteArrayOutputStream().apply{java.util.zip.GZIPOutputStream(this).use{it.write(StateCodec.encode(state.copy(epgBackup="")))}}.toByteArray()
         if (payload.size > SourceIO.MAX_STATE) throw UserError(tr("too_much_data_for_a_backup"))
         val checksum = MessageDigest.getInstance("SHA-256").digest(payload)

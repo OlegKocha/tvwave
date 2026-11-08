@@ -3,17 +3,24 @@ package tv.tvwave.app
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.Dp
+
+/** Preserve the preview's shape when the entire interface, rather than just text, is resized. */
+fun guidePreviewWidth(contentWidth:Dp):Dp=minOf(T.previewHeight*(16f/9f),contentWidth*.48f)
 
 /** Native 960×540dp mapping of the approved 1280×720 design canvas (factor 3/4). */
 object T {
     const val phoneStyle="""body{font:18px system-ui;background:#151718;color:#f3f2ee;max-width:34rem;margin:3rem auto;padding:1.2rem}input,button{box-sizing:border-box;width:100%;font:inherit;padding:1rem;margin:.6rem 0;border-radius:.5rem}button{background:#e6e2d7;border:0;color:#202322}p{line-height:1.6}"""
     const val phoneDrawerFraction=.74f
     const val qrPixels=384; val qrSize=180.dp; val recoveryWidth=560.dp
+    val searchSidebarWidth=176.dp; val searchTitle=22.sp
+    const val searchResultsWeight=.57f; const val searchDetailsWeight=.43f
     val leftMainWidth=252.dp; val leftGroupWidth=240.dp
     val brandMark=32.dp
     val leftRailWidth=64.dp; val menuIcon=22.dp; val railAction=48.dp; val railFooter=48.dp
     val channelLogo=36.dp; val logoInset=3.dp; val channelContentGap=3.dp
     const val menuMotionMs=220; const val videoMotionMs=300
+    val switchBlue=Color(0xFF1968D7); val switchWidth=52.dp; val switchHeight=28.dp
     val bg=Color(0xFF151718); val surface=Color(0xFF222526); val raised=Color(0xFF303435)
     val border=Color(0xFF484D4E); val inputBorder=Color(0xFF8D9696)
     val text=Color(0xFFF3F2EE); val muted=Color(0xFFBCC3C2); val accent=Color(0xFFE6E2D7)
@@ -27,6 +34,7 @@ object T {
     val hudInset=6.dp
     val liveDot=Color(0xFFFF565B); val hudTrack=Color.White.copy(alpha=.25f)
     val transportWidth=70.dp; val transportHeight=46.dp; val transportIcon=24.dp
+    val loadingSize=40.dp; val loadingStroke=3.dp
     val transportCircle=40.dp; val hudUtilityCircle=30.dp
     val hudUtilityWidth=84.dp; val hudTimelineHeight=30.dp; val hudTrackHeight=3.dp
     val hudKnob=8.dp; val hudDot=6.dp; val hudCompactTitle=20.sp; val hudLabel=12.sp

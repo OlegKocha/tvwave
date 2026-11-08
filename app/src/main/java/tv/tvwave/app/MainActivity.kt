@@ -29,6 +29,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.togetherWith
@@ -54,6 +56,7 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.focusable
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.foundation.background
@@ -163,7 +166,9 @@ class MainActivity : ComponentActivity() {
     private var epgRows by mutableStateOf<Map<String,List<Programme>>>(emptyMap())
     private var nowTime by mutableLongStateOf(System.currentTimeMillis())
     private var guideTime by mutableLongStateOf(0L)
-    private var searchEditing by mutableStateOf(false)
+    private val guideSearch=GuideSearchState()
+    private val searchHistory by lazy { SearchHistory(getSharedPreferences("search_history",MODE_PRIVATE)) }
+    private fun rememberSearch(term:String=guideSearch.submittedQuery){guideSearch.recentQueries=searchHistory.record(term)}
     private var screen by mutableStateOf("guide")
     private var backgroundScreen by mutableStateOf("guide")
     private val panelStack=mutableListOf<String>()
@@ -190,6 +195,8 @@ class MainActivity : ComponentActivity() {
     private var pendingProgramme by mutableStateOf<Pair<Channel,Programme>?>(null)
     private var archiveEnded by mutableStateOf(false)
     private var archiveLoadJob:Job?=null
+    private var archiveLoading by mutableStateOf(false)
+    private var archiveLoadRevision=0L
     private var archiveInitialPosition:Long?=null
     private var hudFocus by mutableStateOf("player-pause")
     private lateinit var playbackDiagnostics:PlaybackDiagnostics
@@ -215,13 +222,11 @@ class MainActivity : ComponentActivity() {
     private var password by mutableStateOf("")
     private var restoreBytes: ByteArray?=null
     private var restoreState by mutableStateOf<AppState?>(null)
+    private var reviewingBackup by mutableStateOf(false)
     private var exportBytes: ByteArray?=null
     private var ioJob: Job?=null
-    private var files by mutableStateOf<List<File>>(emptyList())
-    private var folder by mutableStateOf<File?>(null)
     private var filePurpose="playlist"
     private var previousScreen="source"
-    private val imports get()=File(getExternalFilesDir(null),"Import").apply { mkdirs() }
     private val exportPicker=registerForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
         if(uri==null) { exportBytes?.fill(0);exportBytes=null;message=tr("save_cancelled") }
         else saveExport(uri)
@@ -297,7 +302,7 @@ class MainActivity : ComponentActivity() {
         updateKeepScreen()
     }
     private fun updateKeepScreen() {
-        if(playback in listOf("playing","buffering"))window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        if(archiveLoading||playback in listOf("playing","buffering"))window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -314,10 +319,12 @@ class MainActivity : ComponentActivity() {
         val code=generateSequence<Throwable>(error){it.cause}.filterIsInstance<HttpDataSource.InvalidResponseCodeException>().firstOrNull()?.responseCode
         val terminal=code in listOf(401,403,404,410)||error?.errorCode in listOf(PlaybackException.ERROR_CODE_DECODING_FAILED,PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,PlaybackException.ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED)
         playbackError=when(code){401,403->tr("the_source_denied_access_check_your_subscription_or_url");404,410->tr("the_source_can_no_longer_find_this_channel_update_your_playlist");else->if(terminal)tr("this_video_format_is_not_supported_by_your_device")else tr("connection_to_the_channel_was_interrupted_check_your_network_or_select")}
-        if(archiveSession!=null)playbackError=when(code){
-            404,410->tr("this_programme_s_recording_is_unavailable")
-            401,403->tr("the_source_denied_access_to_catch_up_check_your_subscription")
-            else->if(terminal)tr("could_not_play_this_recording")else tr("could_not_load_catch_up_retry")
+        if(archiveSession!=null)playbackError=when {
+            code!=null->ArchiveErrors.http(code)
+            error?.errorCode in listOf(PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED,PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,PlaybackException.ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED)->tr("archive_invalid_response")
+            terminal->tr("could_not_play_this_recording")
+            error!=null->ArchiveErrors.failure(error)
+            else->tr("archive_response_timeout")
         }
         val wait=if(terminal||!player.playWhenReady)null else recovery.nextDelay()
         playback="error";controls=true;updateKeepScreen()
@@ -384,7 +391,8 @@ class MainActivity : ComponentActivity() {
     private var fontPreview by mutableStateOf<Int?>(null)
     private var fontSaveJob:Job?=null
     private val fontPercent get()=fontPreview?:data.fontPercent
-    private fun resizeText(value:Int,immediate:Boolean=false){
+    private var visibleGuideRows by mutableIntStateOf(6)
+    private fun resizeInterface(value:Int,immediate:Boolean=false){
         val percent=(value.coerceIn(60,130)/5f).roundToInt()*5
         fontPreview=percent
         fontSaveJob?.cancel()
@@ -396,7 +404,16 @@ class MainActivity : ComponentActivity() {
             }catch(e:CancellationException){throw e}catch(e:Exception){error=safeError(e)}
         }
     }
-    private fun persist(transform:(AppState)->AppState) { work{change(transform=transform)} }
+    // Small preference writes stay interactive. change() serializes them under stateLock,
+    // so rapid presses toggle the latest saved state without dropping input or moving focus.
+    private fun persist(updateTracks:Boolean=false,transform:(AppState)->AppState) {
+        if(busy)return
+        lifecycleScope.launch {
+            try{change(transform=transform);if(updateTracks)applyTracks()}
+            catch(e:CancellationException){throw e}
+            catch(e:Exception){error=safeError(e)}
+        }
+    }
     private fun applyTracks(){ player.trackSelectionParameters=player.trackSelectionParameters.buildUpon().setPreferredAudioLanguage(data.audioLanguage.ifEmpty{null}).setTrackTypeDisabled(C.TRACK_TYPE_TEXT,!data.subtitles).build() }
     private fun tune(channel:Channel,full:Boolean=true) {
         cancelArchiveLoad()
@@ -433,7 +450,7 @@ class MainActivity : ComponentActivity() {
         if(p.end>now){pendingProgramme=c to p;return}
         startArchive(c,p)
     }
-    private fun cancelArchiveLoad(){archiveLoadJob?.cancel();archiveLoadJob=null}
+    private fun cancelArchiveLoad(){archiveLoadRevision++;archiveLoadJob?.cancel();archiveLoadJob=null;archiveLoading=false;updateKeepScreen()}
     private fun archiveSupported(channel:Channel)=ArchivePreview.source(this,channel)!=null||IlookArchive.supports(channel)
     private fun channelArchiveDays(channel:Channel?):Int = when {
         channel==null -> 0
@@ -489,13 +506,15 @@ class MainActivity : ComponentActivity() {
         }
         if(!IlookArchive.supports(channel)){message=tr("catch_up_is_unavailable_for_this_channel");return}
         if(IlookArchive.expired(channel,p,now)){message=tr("recording_unavailable_this_channel_keeps_recordings_for_days", channel.archiveDays);return}
-        pendingProgramme=null;message=tr("loading_recording")
+        pendingProgramme=null;message="";archiveLoading=true;updateKeepScreen()
+        val requestRevision=archiveLoadRevision
         archiveLoadJob=lifecycleScope.launch {
             try{
                 val session=withContext(Dispatchers.IO){IlookArchive.open(http,channel,p,target,now)}
                 applyArchive(session,target,focus,playWhenReady,resetRecovery)
             }catch(e:CancellationException){throw e}
-            catch(e:Exception){message=if(e is UserError)e.message.orEmpty()else tr("could_not_load_the_recording_check_your_connection_and_try_again")}
+            catch(e:Exception){if(requestRevision==archiveLoadRevision)message=ArchiveErrors.failure(e)}
+            finally {if(requestRevision==archiveLoadRevision){archiveLoading=false;archiveLoadJob=null;updateKeepScreen()}}
         }
     }
     private fun returnToLive(channel:Channel?=playing) {
@@ -546,7 +565,7 @@ class MainActivity : ComponentActivity() {
                 if(seekDraft!=null){val target=seekDraft!!;seekDraft=null;seekArchive(target)}
                 else{val p=archiveSession?.programme?:programme(playing?.id)?:return;seekDraft=if(archiveSession!=null)currentArchivePosition() else (System.currentTimeMillis()-p.start).coerceAtLeast(0)}
             }
-            "player-subtitles"->work{change{it.copy(subtitles=!it.subtitles)};applyTracks()}
+            "player-subtitles"->persist(updateTracks=true){it.copy(subtitles=!it.subtitles)}
             "player-favourite"->playing?.id?.let{id->persist{it.copy(favourites=if(id in it.favourites)it.favourites-id else it.favourites+id)}}
         }
     }
@@ -596,7 +615,8 @@ class MainActivity : ComponentActivity() {
             "player" -> if(controls){controls=false}else{screen="guide"}
             "guide" -> if(guideZone==1||guideTime!=0L){guideZone=0;guideTime=0L}else openPanel("groups")
             "browse" -> {screen="player";controls=true;interaction++}
-            "details" -> {guideTime=0L;guideZone=0;browseZone=0;screen=detailsReturn;interaction++}
+            "details" -> {guideTime=0L;guideZone=0;browseZone=0;if(detailsReturn=="search")guideSearch.returnToResults=true;screen=detailsReturn;interaction++}
+            "search" -> {rememberSearch();guideSearch.returnToResults=false;query="";screen=if(panelStack.isNotEmpty())panelStack.removeAt(panelStack.lastIndex)else "main";error="";message=""}
             "groups" -> showMainMenu()
             "main" -> {
                 if(exitConfirmation.press(SystemClock.elapsedRealtime()))finish()
@@ -604,7 +624,7 @@ class MainActivity : ComponentActivity() {
             }
             else -> {
                 if(screen=="restorePassword"){password="";restoreBytes?.fill(0);restoreBytes=null}
-                if(screen=="restoreConfirm")restoreState=null
+                if(screen=="restoreConfirm"||screen=="files"){restoreState=null;reviewingBackup=false}
                 if(screen=="source")candidate=null
                 if(screen=="phone")closePhone()
                 screen=if(panelStack.isNotEmpty())panelStack.removeAt(panelStack.lastIndex)else backgroundScreen
@@ -630,7 +650,7 @@ class MainActivity : ComponentActivity() {
             return true
         }
         if(event.action==AndroidKey.ACTION_DOWN && event.keyCode!=AndroidKey.KEYCODE_BACK){exitConfirmation.reset();exitHint=false}
-        if(screen in listOf("groups","main","search") && !(screen=="search"&&searchEditing) && event.keyCode in listOf(AndroidKey.KEYCODE_DPAD_LEFT,AndroidKey.KEYCODE_DPAD_RIGHT)){
+        if(screen in listOf("groups","main") && event.keyCode in listOf(AndroidKey.KEYCODE_DPAD_LEFT,AndroidKey.KEYCODE_DPAD_RIGHT)){
             if(event.action==AndroidKey.ACTION_DOWN && event.repeatCount==0){
                 if(screen=="groups"){
                     if(event.keyCode==AndroidKey.KEYCODE_DPAD_LEFT)showMainMenu()else closePanels()
@@ -725,20 +745,34 @@ class MainActivity : ComponentActivity() {
         returnTo("playlists")
     }}
     private fun chooseDocument(purpose:String) {
-        filePurpose=purpose;previousScreen=screen;error=""
-        openPanel("files");listFiles(if(purpose=="backup" && Build.VERSION.SDK_INT>=30 && Environment.isExternalStorageManager())Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)else imports)
+        filePurpose=purpose;previousScreen=screen;error="";reviewingBackup=false;restoreState=null
+        openPanel("files")
     }
-    private fun listFiles(dir:File){folder=dir;files=dir.listFiles()?.filter{it.isDirectory || if(filePurpose=="playlist")it.extension.lowercase() in listOf("m3u","m3u8")else it.extension.lowercase() in setOf("tvwavebackup",LegacyBackup.EXTENSION)}?.sortedWith(compareBy<File>{!it.isDirectory}.thenBy{it.name.lowercase()})?:emptyList()}
-    private fun readDocument(uri:Uri){if(panelStack.lastOrNull()==previousScreen)panelStack.removeAt(panelStack.lastIndex);screen=previousScreen;work {
+    private fun readDocument(uri:Uri){work {
         val bytes=withContext(Dispatchers.IO){SourceIO.read(contentResolver.openInputStream(uri)?:throw UserError(tr("could_not_open_the_file")),if(filePurpose=="playlist")SourceIO.MAX_PLAYLIST else SourceIO.MAX_STATE+60)}
-        if(filePurpose=="playlist"){candidate=withContext(Dispatchers.Default){parseSource(bytes)};chosenName=uri.lastPathSegment?.substringAfterLast('/')?:tr("file")}
-        else {
+        // Keep the browser visible until validation succeeds, so errors also appear on first launch.
+        if(filePurpose=="playlist"){
+            candidate=withContext(Dispatchers.Default){parseSource(bytes)}
+            chosenName=uri.lastPathSegment?.substringAfterLast('/')?:tr("file")
+            if(panelStack.lastOrNull()==previousScreen)panelStack.removeAt(panelStack.lastIndex)
+            screen=previousScreen
+        } else {
             password="";restoreState=null
-            if(BackupFile.needsPassword(bytes)){restoreBytes=bytes;openPanel("restorePassword")}
-            else {restoreState=withContext(Dispatchers.Default){BackupFile.decode(bytes)};openPanel("restoreConfirm")}
+            val encrypted=BackupFile.needsPassword(bytes)
+            if(encrypted)restoreBytes=bytes else restoreState=withContext(Dispatchers.Default){BackupFile.decode(bytes)}
+            if(encrypted){
+                if(panelStack.lastOrNull()==previousScreen)panelStack.removeAt(panelStack.lastIndex)
+                screen=previousScreen
+                openPanel("restorePassword")
+            }
+            // Unencrypted backups stay in the browser: validation and confirmation share one panel.
         }
     }}
-    private fun readFile(file:File){readDocument(Uri.fromFile(file));chosenName=file.name}
+    private fun readFile(file:File){
+        if(busy)return
+        restoreState=null;reviewingBackup=filePurpose=="backup"
+        readDocument(Uri.fromFile(file));chosenName=file.name
+    }
     private fun paste(){
         val manager=getSystemService(CLIPBOARD_SERVICE)as ClipboardManager
         val text=manager.primaryClip?.getItemAt(0)?.coerceToText(this)?.toString().orEmpty()
@@ -756,7 +790,7 @@ class MainActivity : ComponentActivity() {
     }}
     private fun startExport(){work {
         exportBytes=stateLock.withLock{val snapshot=data;withContext(Dispatchers.IO){BackupFile.encode(snapshot)}}
-        val name="TVWave-${SimpleDateFormat("yyyyMMdd-HHmmss",Locale.ROOT).format(Date())}.tvwavebackup"
+        val name="TVWave-${SimpleDateFormat("yyyyMMdd-HHmmss",Locale.ROOT).format(Date())}.${BackupFile.EXTENSION}"
         val intent=Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/octet-stream")
         if(Build.VERSION.SDK_INT<29) {
             if(intent.resolveActivity(packageManager)==null)throw UserError(tr("this_device_needs_a_system_document_picker_to_save_backups"))
@@ -791,7 +825,6 @@ class MainActivity : ComponentActivity() {
         cancelRecovery();player.stop();playing=null
         change(resetCache=true){restored.copy(uiLanguage=restored.uiLanguage.ifEmpty{data.uiLanguage})};epgRevision++;loadFailed=false;restoreState=null;group=BuiltinGroups.ALL;query="";selectedChannel=restored.last.ifEmpty{restored.channels.firstOrNull()?.id.orEmpty()};panelStack.clear();screen="guide";message=tr("settings_and_playlists_restored");applyTracks()
     }}
-    private fun finishSearch(){searchEditing=false;panelStack.clear();backgroundScreen="guide";screen="guide";guideZone=0;guideTime=0}
     private fun programme(id:String?,time:Long=nowTime)=epgRows[id].orEmpty().lastOrNull{it.start<=time&&time<it.end}
     private fun missingEpg(id:String?=selectedChannel):String {
         if(data.sources.isEmpty())return tr("no_programme_guide_added")
@@ -858,13 +891,14 @@ class MainActivity : ComponentActivity() {
         val list=rememberLazyListState()
         val keys=data.sources.map{"epg-source:${it.id}"}+
             (if(data.sources.size<10)listOf("epg-add")else emptyList())+listOf("epg-matches")+
-            (if(data.sources.isNotEmpty())listOf("epg-update")else emptyList())+listOf("epg-interval")
+            (if(data.sources.isNotEmpty())listOf("epg-update")else emptyList())+listOf("epg-auto-update","epg-interval")
         val requests=remember(keys){keys.associateWith{FocusRequester()}}
         var target by remember(keys){mutableStateOf<Int?>(null)}
-        val lastIndex=keys.lastIndex-1
+        val lastIndex=keys.lastIndex-2
         val lastAction=requests.getValue(keys[lastIndex])
         val intervalAction=requests.getValue("epg-interval")
-        val toInterval=Modifier.focusRequester(lastAction).focusProperties{down=intervalAction}
+        val autoUpdateAction=requests.getValue("epg-auto-update")
+        val toInterval=Modifier.focusRequester(lastAction).focusProperties{down=autoUpdateAction}
         // Count arrows against the logical destination, even while LazyColumn is
         // composing a row. Spatial focus search can drop keys at a viewport edge.
         val navigate: (AndroidKey)->Boolean=remember(keys,busy){ { event->
@@ -884,7 +918,7 @@ class MainActivity : ComponentActivity() {
         LaunchedEffect(target,keys,screen){
             if(screen!="epg")return@LaunchedEffect
             val destination=target?:return@LaunchedEffect
-            if(destination<keys.lastIndex&&list.layoutInfo.visibleItemsInfo.none{it.index==destination})list.scrollToItem(destination)
+            if(destination<=lastIndex&&list.layoutInfo.visibleItemsInfo.none{it.index==destination})list.scrollToItem(destination)
             repeat(5){
                 withFrameNanos{}
                 // A newer key may arrive before recomposition cancels this effect.
@@ -919,7 +953,10 @@ class MainActivity : ComponentActivity() {
             }
         }
         HorizontalDivider(color=T.border)
-        Setting(tr("update_every"),"epg-interval",if(data.epgAutoUpdate)tr("h", data.epgIntervalHours)else tr("off"),modifier=Modifier.focusRequester(intervalAction)){openPanel("epgInterval")}
+        ToggleSetting(tr("epg_auto_update"),"epg-auto-update",data.epgAutoUpdate,Modifier.focusRequester(autoUpdateAction)){
+            persist{it.copy(epgAutoUpdate=!it.epgAutoUpdate)}
+        }
+        Setting(tr("update_every"),"epg-interval",tr("h", data.epgIntervalHours),modifier=Modifier.focusRequester(intervalAction)){openPanel("epgInterval")}
     }
     @Composable private fun EpgEditor(){
         Field(tr("name_optional"),epgName){epgName=it.take(120)}
@@ -1084,7 +1121,7 @@ class MainActivity : ComponentActivity() {
     private fun defaultFocus(page:String=screen):String=when(page){
         "updates"->"update-action"
         "epgOrder"->epgOrder.firstOrNull()?.let{"epg-move:${it.id}"}.orEmpty();"epgOffset"->"offset-reset";"playlistEpg"->"playlist-epg-auto";"phone"->"phone-close";"settings"->"playlists";"playlists"->data.playlists.firstOrNull()?.let{"playlist:${it.id}"}?:"add";"source"->if(candidate!=null)"source-add"else "source-url"
-        "files"->files.firstOrNull()?.let{"file:${it.path}"}?:"file-up"
+        "files"->"file-close"
         "language"->"language:${L10n.language}";"appearance"->"font-size";"playback","audio"->"audio-language";"startup"->"resume";"backup"->if(loadFailed)"restore"else "export"
         "restorePassword"->"legacy-open";"restoreConfirm"->"restore-apply";"more"->"pause";"search"->"search-input"
         "epg"->data.sources.firstOrNull()?.let{"epg-source:${it.id}"}?:"epg-add"
@@ -1117,7 +1154,8 @@ class MainActivity : ComponentActivity() {
             }
             return
         }
-        CompositionLocalProvider(LocalDensity provides Density(density.density,density.fontScale*fontPercent/100f)){AppContent()}
+        // Scale dp and sp together. Keep the persisted fontPercent key for existing backups.
+        CompositionLocalProvider(LocalDensity provides Density(density.density*fontPercent/100f,density.fontScale)){AppContent()}
     }
     @Composable private fun AppContent(){
         val rootFocus=remember{FocusRequester()}
@@ -1153,10 +1191,11 @@ class MainActivity : ComponentActivity() {
             }
         }
         LaunchedEffect(matchSource,epgRevision){matchCatalog=if(matchSource.isEmpty())emptyList()else withContext(Dispatchers.IO){EpgCache.catalog(repository.readableDatabase,matchSource)}}
-        LaunchedEffect(loaded,data.sources,data.epgBindings,data.epgOffsets,data.playlistEpgSources,epgRevision,selectedChannel,group,query,nowTime/60000,guideTime/3600000,playing?.id){
+        LaunchedEffect(loaded,data.sources,data.epgBindings,data.epgOffsets,data.playlistEpgSources,epgRevision,selectedChannel,group,query,nowTime/60000,guideTime/3600000,playing?.id,visibleGuideRows){
             if(loaded){
                 val list=filtered();val index=list.indexOfFirst{it.id==selectedChannel}.coerceAtLeast(0)
-                val ids=(list.drop((index-6).coerceAtLeast(0)).take(14).map{it.id}+listOfNotNull(playing?.id)).distinct()
+                val around=maxOf(6,visibleGuideRows)
+                val ids=(list.drop((index-around).coerceAtLeast(0)).take(around*2+2).map{it.id}+listOfNotNull(playing?.id)).distinct()
                 val from=EpgRetention.cutoff(nowTime)
                 epgRows=withContext(Dispatchers.IO){
                     if(data.sources.isEmpty())emptyMap()
@@ -1196,7 +1235,7 @@ class MainActivity : ComponentActivity() {
                 else {
                     val base=when(screen){"browse"->"player";"details"->"details";"guide","player"->screen;else->backgroundScreen}
                     val overlay=screen !in listOf("guide","player","browse","details")
-                    val leftDepth=when{screen in listOf("main","search")->2;screen=="groups"->1;!overlay->0;panelStack.any{it in listOf("main","search")}->2;"groups" in panelStack->1;else->0}
+                    val leftDepth=when{screen=="search"->0;screen=="main"->2;screen=="groups"->1;!overlay->0;panelStack.any{it in listOf("main","search")}->2;"groups" in panelStack->1;else->0}
                     val expandedMainWidth=T.leftMainWidth*maxOf(1f,LocalDensity.current.fontScale)
                     val mainWidth=when(leftDepth){2->expandedMainWidth;1->T.leftRailWidth;else->0.dp}
                     var lastMenuExpanded by remember{mutableStateOf(false)}
@@ -1209,7 +1248,7 @@ class MainActivity : ComponentActivity() {
                         val motion=tween<androidx.compose.ui.unit.Dp>(T.videoMotionMs,easing=FastOutSlowInEasing)
                         val x by animateDpAsState(if(full)0.dp else T.safe,motion,label="video-x")
                         val y by animateDpAsState(if(full)0.dp else T.previewTop,motion,label="video-y")
-                        val width by animateDpAsState(if(full)maxWidth else (maxWidth-T.safe*2)*.34f,motion,label="video-width")
+                        val width by animateDpAsState(if(full)maxWidth else guidePreviewWidth(maxWidth-T.safe*2),motion,label="video-width")
                         val height by animateDpAsState(if(full)maxHeight else T.previewHeight,motion,label="video-height")
                         val radius by animateDpAsState(if(full)0.dp else T.previewRadius,motion,label="video-radius")
                         if(base=="details")ProgrammeDetails()else if(!full)Guide(active=!overlay)
@@ -1245,6 +1284,25 @@ class MainActivity : ComponentActivity() {
                             CompositionLocalProvider(LocalPanelPage provides page){Box(Modifier.fillMaxSize().focusProperties{canFocus=right&&page==screen}){Drawer()}}
                         }
                     }
+                    if(screen=="search")UnifiedSearch()
+                    if(!overlay&&(archiveLoading||archiveSession!=null&&playback=="buffering")) {
+                        if(screen=="player") {
+                            Box(Modifier.align(Alignment.Center).testTag("archive-loading")) {
+                                CircularProgressIndicator(
+                                    modifier=Modifier.size(T.loadingSize).testTag("archive-loading-progress")
+                                        .semantics{contentDescription=tr("loading_recording")},
+                                    color=T.accent,strokeWidth=T.loadingStroke,trackColor=Color.Transparent)
+                            }
+                        }else {
+                            Column(Modifier.align(Alignment.Center).fillMaxWidth(.46f).testTag("archive-loading")
+                                .background(T.surface.copy(alpha=.96f),RoundedCornerShape(T.radius)).padding(T.pad),
+                                verticalArrangement=Arrangement.spacedBy(T.gap)) {
+                                Text(tr("loading_recording"),color=T.text,fontSize=T.body)
+                                LinearProgressIndicator(Modifier.fillMaxWidth().testTag("archive-loading-progress"),color=T.accent,trackColor=T.border)
+                                if(archiveLoading)Caption(tr("archive_loading_cancel"))
+                            }
+                        }
+                    }
                     if(exitHint || !overlay&&message.isNotEmpty()) {
                         Text(if(exitHint)tr("press_back_twice_to_exit")else message,Modifier.align(Alignment.BottomCenter).padding(bottom=T.footerSpace).background(T.raised,RoundedCornerShape(T.radius)).padding(T.gap),color=T.text,fontSize=T.caption)
                     }
@@ -1268,18 +1326,18 @@ class MainActivity : ComponentActivity() {
         if(error.isNotEmpty())Text(error,color=T.danger,fontSize=T.caption)
         if(message.isNotEmpty())Text(message,color=T.success,fontSize=T.caption)
     }
-    @Composable private fun Action(label:String,modifier:Modifier=Modifier,key:String=label,enabled:Boolean=true,row:Boolean=false,value:String="",subtitle:String="",icon:String?=null,onClick:()->Unit){
+    @Composable private fun Action(label:String,modifier:Modifier=Modifier,key:String=label,enabled:Boolean=true,row:Boolean=false,value:String="",subtitle:String="",icon:String?=null,checked:Boolean?=null,onClick:()->Unit){
         val interactionSource=remember{MutableInteractionSource()}
         var focused by remember{mutableStateOf(false)}
         val requester=remember{FocusRequester()};val page=LocalPanelPage.current?:screen
         val interactive=enabled && page==screen
         // Invalidating a checked playlist while typing must not pull focus out of the field.
         // Validation/file loading already restore focus when busy finishes (interactive changes).
-        LaunchedEffect(page,folder,key,interactive,if(page=="epg")epgUpdating else false){
+        LaunchedEffect(page,key,interactive,if(page=="epg")epgUpdating else false){
             val wanted=when{
                 page=="epg"&&epgUpdating&&panelFocus[page]=="epg-update"->"epg-cancel"
                 page=="epg"&&!epgUpdating&&panelFocus[page]=="epg-cancel"->"epg-update"
-                page=="files"||page=="source"&&candidate!=null->defaultFocus(page)
+                page=="source"&&candidate!=null->defaultFocus(page)
                 else->panelFocus[page]?:defaultFocus(page)
             }
             if(key==wanted&&interactive){
@@ -1287,12 +1345,15 @@ class MainActivity : ComponentActivity() {
                 repeat(5){delay(60);if(runCatching{requester.requestFocus()}.getOrDefault(false))return@LaunchedEffect}
             }
         }
-        val fg=if(focused)T.onAccent else if(enabled)T.text else T.muted
+        val fg=if(focused&&checked==null)T.onAccent else if(enabled)T.text else T.muted
         val contentSizedMenuRow=row&&page in listOf("groups","main","search")
         Row(modifier.testTag(key).focusRequester(requester).onFocusChanged{focused=it.isFocused;if(it.isFocused)panelFocus[page]=key}
-            .then(focusSurface(focused,if(row)T.surface else T.raised))
+            .then(if(checked!=null)Modifier.background(T.surface,RoundedCornerShape(T.radius))
+                .border(T.focusLine,if(focused)T.accent else Color.Transparent,RoundedCornerShape(T.radius))
+                else focusSurface(focused,if(row)T.surface else T.raised))
             .then(if(row)Modifier else Modifier.border(T.line,if(focused)T.accent else T.inputBorder,RoundedCornerShape(T.radius)))
-            .clickable(enabled=interactive,interactionSource=interactionSource,indication=null,role=Role.Button,onClick=onClick)
+            .then(if(checked!=null)Modifier.toggleable(value=checked,enabled=interactive,interactionSource=interactionSource,indication=null,role=Role.Switch,onValueChange={onClick()})
+                else Modifier.clickable(enabled=interactive,interactionSource=interactionSource,indication=null,role=Role.Button,onClick=onClick))
             // Menu spacing comes from fixed padding, not a minimum row height:
             // smaller text pulls subsequent entries upward instead of leaving empty space.
             .then(if(contentSizedMenuRow)Modifier else Modifier.heightIn(min=if(row)T.settingRow*maxOf(1f,LocalDensity.current.fontScale)else T.actionHeight))
@@ -1300,8 +1361,20 @@ class MainActivity : ComponentActivity() {
             if(icon!=null)MenuIcon(icon,fg,Modifier.size(T.menuIcon*if(contentSizedMenuRow)minOf(1f,LocalDensity.current.fontScale)else 1f))
             Column(if(row)Modifier.weight(1f)else Modifier){Text(label,color=fg,fontSize=T.body,fontWeight=FontWeight.Normal,lineHeight=(T.body)*1.3f,maxLines=2,overflow=TextOverflow.Ellipsis)
                 if(subtitle.isNotEmpty())Text(subtitle,color=if(focused)T.onAccent else T.muted,fontSize=T.micro,maxLines=2,overflow=TextOverflow.Ellipsis)}
-            if(value.isNotEmpty())Text(value,color=if(focused)T.onAccent else T.muted,fontSize=T.caption)
+            if(checked!=null){
+                val position by animateFloatAsState(if(checked)1f else 0f,animationSpec=tween(150),label="switch-thumb")
+                androidx.compose.foundation.Canvas(Modifier.size(T.switchWidth,T.switchHeight)){
+                    val radius=size.height/2
+                    drawRoundRect(if(checked)T.switchBlue else T.border,cornerRadius=CornerRadius(radius,radius))
+                    if(!checked)drawRoundRect(T.inputBorder,cornerRadius=CornerRadius(radius,radius),style=Stroke(T.line.toPx()))
+                    val thumb=radius-3.dp.toPx()
+                    drawCircle(Color.White,radius=thumb,center=Offset(radius+(size.width-size.height)*position,radius))
+                }
+            }else if(value.isNotEmpty())Text(value,color=if(focused)T.onAccent else if(value=="●")T.text else T.muted,fontSize=if(value=="●")T.micro else T.caption)
         }
+    }
+    @Composable private fun ToggleSetting(label:String,key:String,checked:Boolean,modifier:Modifier=Modifier,onClick:()->Unit){
+        Action(label,modifier.fillMaxWidth(),key,enabled=!busy,row=true,checked=checked,onClick=onClick)
     }
     @Composable private fun Setting(label:String,key:String,value:String="›",subtitle:String="",modifier:Modifier=Modifier,onClick:()->Unit){Action(label,modifier.fillMaxWidth(),key,enabled=!busy,row=true,value=value,subtitle=subtitle,icon=key.removePrefix("main-").takeIf{key in listOf("main-search","main-tv","main-favourites","main-settings")},onClick=onClick)}
     @Composable private fun Field(label:String,value:String,secret:Boolean=false,autoFocus:Boolean=false,onSubmit:(()->Unit)?=null,onFocus:(Boolean)->Unit={},modifier:Modifier=Modifier,onChange:(String)->Unit){
@@ -1349,18 +1422,19 @@ class MainActivity : ComponentActivity() {
         LaunchedEffect(active,loaded){if(active&&loaded&&data.playlists.isNotEmpty()){delay(80);root.requestFocus()}}
         val rowHeight=(T.row+T.small)*maxOf(1f,LocalDensity.current.fontScale)
         val numberMeasurer=androidx.compose.ui.text.rememberTextMeasurer()
-        val numberStyle=androidx.compose.ui.text.TextStyle(fontSize=T.channelName,lineHeight=T.channelLine)
+        val numberStyle=androidx.compose.ui.text.TextStyle(fontSize=T.channelName,lineHeight=T.channelLine,letterSpacing=0.sp)
         val numberWidth=maxOf(T.channelNumber,with(LocalDensity.current){
             numberMeasurer.measure("8".repeat(visible.size.toString().length),numberStyle,maxLines=1).size.width.toDp()
         })
         BoxWithConstraints(Modifier.fillMaxSize().testTag("guide").semantics{stateDescription=if(guideZone==0)tr("channel_now")else if(guideTime==0L)tr("programmes_now")else tr("programmes_another_time")}.focusRequester(root).onPreviewKeyEvent{guideKey(it.nativeKeyEvent)}.focusable(enabled=active&&data.playlists.isNotEmpty())){
             val count=((maxHeight-T.tableTop-T.footerSpace-T.headHeight)/(rowHeight+T.rowGap)).toInt().coerceAtLeast(1)
+            SideEffect{visibleGuideRows=count}
             LaunchedEffect(index,group,query,count){
                 if(index<list.firstVisibleItemIndex)list.scrollToItem(index)
                 else if(index>=list.firstVisibleItemIndex+count)list.scrollToItem((index-count+1).coerceAtLeast(0))
             }
-            val contentWidth=maxWidth-T.safe*2;val previewWidth=contentWidth*.34f
-            val channelWidth=if(fontPercent>=115)T.largeChannelWidth else T.channelWidth
+            val contentWidth=maxWidth-T.safe*2;val previewWidth=guidePreviewWidth(contentWidth)
+            val channelWidth=T.channelWidth
             Row(Modifier.fillMaxWidth().padding(horizontal=T.safe).offset(y=T.top),horizontalArrangement=Arrangement.SpaceBetween){Caption(tr("brand_name"),Modifier.testTag("guide-brand"));Caption(guideDate)}
             if(data.playlists.isEmpty()||loadFailed){
                 Column(Modifier.align(Alignment.Center).padding(T.safe),horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(T.pad)){
@@ -1368,7 +1442,7 @@ class MainActivity : ComponentActivity() {
                     Caption(if(loadFailed)error else tr("add_a_playlist_by_url_file_or_qr_code_from_your_phone"))
                     Row(horizontalArrangement=Arrangement.spacedBy(T.gap)){
                         if(!loadFailed)Action(tr("add_playlist"),Modifier.focusRequester(emptyAction),key="add",enabled=active){newSource()}
-                        Action(tr("restore_backup"),if(loadFailed)Modifier.focusRequester(emptyAction)else Modifier,key="restore",enabled=active){openPanel("backup")}
+                        Action(tr("restore_backup"),if(loadFailed)Modifier.focusRequester(emptyAction)else Modifier,key="restore",enabled=active){chooseDocument("backup")}
                     }
                     if(!loadFailed)Row(horizontalArrangement=Arrangement.spacedBy(T.gap)){
                         Action(tr("from_phone_via_qr"),key="welcome-phone",enabled=active&&!busy){newPhonePlaylist()}
@@ -1401,7 +1475,7 @@ class MainActivity : ComponentActivity() {
                                 Row(Modifier.width(channelWidth+T.small).fillMaxHeight().then(focusSurface(cellFocused&&guideZone==0,T.bg))
                                     .focusProperties{canFocus=false}.clickable(enabled=active){selectedChannel=c.id;guideZone=0;tune(c)}.padding(start=T.small,end=T.tiny),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(T.channelContentGap)){
                                     val color=if(cellFocused&&guideZone==0)T.onAccent else T.text
-                                    Text("${i+1}",Modifier.width(numberWidth),color=color,fontSize=T.channelName,lineHeight=T.channelLine,maxLines=1,textAlign=androidx.compose.ui.text.style.TextAlign.Start)
+                                    Text("${i+1}",Modifier.width(numberWidth),color=color,style=numberStyle,maxLines=1,textAlign=androidx.compose.ui.text.style.TextAlign.Start)
                                     ChannelLogo(c,color,if(cellFocused&&guideZone==0)T.onAccent else T.inputBorder)
                                     Text(c.name,Modifier.weight(1f),color=color,fontSize=T.channelName,lineHeight=T.channelLine,maxLines=2,overflow=TextOverflow.Ellipsis)
                                     if(channelArchiveDays(c)>0)ArchiveIcon(color,Modifier.size(18.dp).testTag("channel-archive:${i}"))
@@ -1427,25 +1501,59 @@ class MainActivity : ComponentActivity() {
         Column(Modifier.align(Alignment.CenterStart).fillMaxHeight().fillMaxWidth().background(T.surface).padding(start=T.pad,end=T.pad,top=T.drawerTop,bottom=T.drawerBottom),verticalArrangement=Arrangement.spacedBy(T.gap)){
             Text(tr("groups"),color=T.text,fontSize=T.title,fontWeight=FontWeight.SemiBold)
             LazyColumn(state=state,modifier=Modifier.weight(1f).padding(T.focusGap),verticalArrangement=Arrangement.spacedBy(T.tiny)){
-                items(groups){g->Setting(BuiltinGroups.label(g),"group:${g}",if(group==g)"✓"else""){selectGroup(g)}}
+                items(groups){g->Setting(BuiltinGroups.label(g),"group:${g}",if(group==g)"●"else""){selectGroup(g)}}
             }
             Caption(tr("main_menu_channels"))
         }
+    }
+    @Composable private fun UnifiedSearch(){
+        var searching by remember{mutableStateOf(false)}
+        var failure by remember{mutableStateOf("")}
+        var preview by remember{mutableStateOf<Pair<Channel,Programme?>?>(null)}
+        var detail by remember{mutableStateOf<Programme?>(null)}
+        LaunchedEffect(guideSearch.submittedQuery,guideSearch.searchRevision,epgRevision,data.playlists,data.sources,data.epgBindings,data.playlistEpgSources,data.epgOffsets,nowTime/60000){
+            val term=guideSearch.submittedQuery;failure=""
+            if(term.isEmpty()){guideSearch.results=GuideSearchResults();guideSearch.completedQuery=term;searching=false;return@LaunchedEffect}
+            searching=true
+            try{
+                val snapshot=data;val time=nowTime
+                val result=withContext(Dispatchers.IO){val job=currentCoroutineContext();EpgSearch.find(repository.readableDatabase,snapshot,term,time){job.ensureActive()}}
+                guideSearch.results=result;guideSearch.completedQuery=term
+            }catch(e:CancellationException){throw e}
+            catch(e:Exception){failure=tr("search_failed")}
+            finally{searching=false}
+        }
+        LaunchedEffect(preview,epgRevision,data.epgOffsets){
+            detail=null
+            val item=preview?:return@LaunchedEffect
+            val time=item.second?.start?:nowTime
+            val offset=data.epgOffsets[item.first.id]?:0
+            detail=withContext(Dispatchers.IO){repository.schedule(item.first.id,time,time+1,1,offset).firstOrNull()}
+        }
+        SearchScreen(guideSearch,searching,failure,detail,
+            brand={BrandHeader()},
+            field={modifier,autoFocus,submit,focus->Field(tr("search_field"),guideSearch.query,autoFocus=autoFocus,onSubmit=submit,onFocus=focus,modifier=modifier){guideSearch.query=it}},
+            logo={channel,color->ChannelLogo(channel,color,T.inputBorder)},archiveAvailable=::programmeHasArchive,span=::programmeSpan,now=nowTime,hasEpg=data.sources.isNotEmpty(),
+            onSelected={channel,p->preview=channel to p},
+            onOpen={channel,p->
+                query="";group=BuiltinGroups.ALL;selectedChannel=channel.id;panelStack.clear();backgroundScreen="guide"
+                if(p==null){screen="guide";guideTime=0L;guideZone=0;tune(channel)}
+                else{
+                    val full=detail?.takeIf{it.start==p.start&&preview?.first?.id==channel.id}?:p
+                    epgRows=epgRows+(channel.id to (epgRows[channel.id].orEmpty().filter{it.start!=p.start}+full).sortedBy{it.start})
+                    guideTime=p.start;guideZone=1;detailsReturn="search";screen="details";error="";message=""
+                }
+            },onRememberQuery={rememberSearch(it)},onRemoveQuery={guideSearch.recentQueries=searchHistory.remove(it)},
+            onTv={rememberSearch();selectGroup(BuiltinGroups.ALL)},onFavourites={rememberSearch();selectGroup(BuiltinGroups.FAVOURITES)},onSettings={rememberSearch();openPanel("settings")})
     }
     @Composable private fun BoxScope.MainMenu(){
         Column(Modifier.align(Alignment.CenterStart).fillMaxHeight().fillMaxWidth().background(T.surface)
             .padding(start=T.pad,end=T.pad,top=T.drawerTop,bottom=T.drawerBottom),verticalArrangement=Arrangement.spacedBy(T.gap)){
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(T.focusGap),verticalArrangement=Arrangement.spacedBy(T.gap)){
                 BrandHeader()
-                if(screen=="search")Field(tr("channel_name"),query,autoFocus=true,onSubmit={finishSearch()},onFocus={searchEditing=it}){query=it;selectedChannel=filtered().firstOrNull()?.id.orEmpty()}
-                Setting(tr("search"),"main-search"){group=BuiltinGroups.ALL;openPanel("search")}
-                if(screen=="search"){
-                    Caption(tr("found", filtered().size))
-                    Setting(tr("view_results"),"search-results",""){finishSearch()}
-                }else{
-                    Setting(tr("tv"),"main-tv",if(group==BuiltinGroups.ALL)"✓"else""){selectGroup(BuiltinGroups.ALL)}
-                    Setting(BuiltinGroups.label(BuiltinGroups.FAVOURITES),"main-favourites",if(group==BuiltinGroups.FAVOURITES)"✓"else""){selectGroup(BuiltinGroups.FAVOURITES)}
-                }
+                Setting(tr("search"),"main-search"){guideSearch.beginVisit(searchHistory.read());openPanel("search")}
+                Setting(tr("tv"),"main-tv",if(group==BuiltinGroups.ALL)"●"else""){selectGroup(BuiltinGroups.ALL)}
+                Setting(BuiltinGroups.label(BuiltinGroups.FAVOURITES),"main-favourites",if(group==BuiltinGroups.FAVOURITES)"●"else""){selectGroup(BuiltinGroups.FAVOURITES)}
             }
             HorizontalDivider(color=T.border)
             Setting(tr("settings"),"main-settings"){openPanel("settings")}
@@ -1454,7 +1562,16 @@ class MainActivity : ComponentActivity() {
     }
     @Composable private fun BoxScope.Drawer(){
         val page=LocalPanelPage.current?:screen
-        Column(Modifier.align(Alignment.CenterEnd).fillMaxHeight().fillMaxWidth(if(page=="phone")T.phoneDrawerFraction else if(page=="updates").46f else T.drawerFraction).background(T.surface)
+        if(page=="files"){
+            FileBrowser(playlist=filePurpose=="playlist",active=screen=="files",error=error,busy=busy,
+                reviewing=reviewingBackup,verified=restoreState!=null,
+                reviewContent={if(restoreState!=null)RestoreConfirm(actions=false)},
+                onSelection={reviewingBackup=false;restoreState=null;error=""},
+                onRestore=::applyRestore,onCancelReview={reviewingBackup=false;restoreState=null;error=""},
+                onFile={if(!busy)readFile(it)},onClose=::back)
+            return
+        }
+        Column(Modifier.align(Alignment.CenterEnd).fillMaxHeight().fillMaxWidth(if(page=="phone")T.phoneDrawerFraction else if(page=="appearance").5f else if(page=="updates").46f else T.drawerFraction).background(T.surface)
             .padding(start=T.pad,end=T.safe,top=T.drawerTop,bottom=T.drawerBottom),verticalArrangement=Arrangement.spacedBy(T.small)){
             Text(if(panelStack.isNotEmpty())panelTitle(panelStack.last()).uppercase(L10n.locale)else tr("tv_wave"),color=T.muted,fontSize=T.micro,lineHeight=T.micro*1.3f,maxLines=1,overflow=TextOverflow.Ellipsis)
             Text(panelTitle(page),color=T.text,fontSize=T.title,lineHeight=(T.title)*1.2f,fontWeight=FontWeight.SemiBold,maxLines=2,overflow=TextOverflow.Ellipsis)
@@ -1463,7 +1580,6 @@ class MainActivity : ComponentActivity() {
             if(page=="source")Notice()
             Spacer(Modifier.height(T.tiny))
             when(page){
-                "files" -> FilesScreen()
                 "epg" -> EpgSettings()
                 "epgMatchChannels" -> MatchChannels()
                 "epgMatchCatalog" -> MatchCatalog()
@@ -1473,14 +1589,14 @@ class MainActivity : ComponentActivity() {
                     when(page){
                         "epgOrder"->EpgOrderScreen();"epgOffset"->EpgOffsetScreen();"playlistEpg"->PlaylistEpgScreen();"phone"->PhoneScreen();"source"->SourceScreen();"settings"->SettingsScreen();"playlists"->PlaylistsScreen()
                         "epgEdit"->EpgEditor();"epgMenu"->EpgMenu();"epgMatchSource"->MatchSources()
-                        "epgInterval"->listOf(6,12,24).forEach{hours->Setting(if(hours==24)tr("every_24_hours")else tr("every_hours", hours),"interval:${hours}",if(data.epgIntervalHours==hours)"✓"else""){work{change{it.copy(epgIntervalHours=hours,epgAutoUpdate=true)};returnTo("epg")}}}
+                        "epgInterval"->listOf(6,12,24).forEach{hours->Setting(if(hours==24)tr("every_24_hours")else tr("every_hours", hours),"interval:${hours}",if(data.epgIntervalHours==hours)"✓"else""){work{change{it.copy(epgIntervalHours=hours)};returnTo("epg")}}}
                         "epgDelete"->{Caption(tr("this_source_and_its_matches_will_be_removed_your_playlists_will_be_kep"));Action(tr("cancel_m245"),key="delete-cancel"){back()};Action(tr("delete"),key="epg-delete-confirm",enabled=!busy){deleteEpg()}}
                         "playlistMenu"->PlaylistMenu()
                         "playlistDelete"->{Caption(tr("this_playlist_and_its_channels_will_be_removed_from_the_app"));Action(tr("cancel_m245"),key="delete-cancel"){back()};Action(tr("delete"),key="playlist-delete-confirm",enabled=!busy){deletePlaylist()}}
                         "appearance"->AppearanceScreen()
                         "language"->LanguageOptions()
                         "playback","audio"->AudioScreen()
-                        "startup"->{Caption(tr("the_tv_guide_opens_on_startup_you_can_also_play_the_last_channel_in_th"));Setting(tr("last_channel"),"resume",if(data.resume)tr("on")else tr("off")){persist{it.copy(resume=!it.resume)}}}
+                        "startup"->{Caption(tr("the_tv_guide_opens_on_startup_you_can_also_play_the_last_channel_in_th"));ToggleSetting(tr("last_channel"),"resume",data.resume){persist{it.copy(resume=!it.resume)}}}
                         "remote"->{Caption(tr("use_the_arrow_keys_ok_and_back_to_watch_tv"));Caption(tr("channels_select_ok_watch_groups_and_menu_programmes_earlier_later_ok_d"));Setting(tr("got_it"),"panel-back",""){back()}}
                         "more"->MoreScreen()
                         "backup"->BackupScreen();"restorePassword"->RestorePassword();"restoreConfirm"->RestoreConfirm()
@@ -1494,31 +1610,30 @@ class MainActivity : ComponentActivity() {
         val languageFocus=remember{FocusRequester()}
         val requester=remember{FocusRequester()};var focused by remember{mutableStateOf(false)}
         LaunchedEffect(Unit){delay(80);requester.requestFocus()}
-        Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween){
-            Text(tr("font_size"),color=T.text,fontSize=T.body)
+        Row(Modifier.fillMaxWidth().padding(top=T.gap),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(T.small)){
+            Text(tr("interface_scale"),Modifier.weight(1f),color=T.text,fontSize=T.body,fontWeight=FontWeight.SemiBold)
             Text("${fontPercent}%",Modifier.testTag("font-value"),color=T.accent,fontSize=T.body)
         }
-        Slider(value=fontPercent.toFloat(),onValueChange={resizeText(it.roundToInt())},
-            valueRange=60f..130f,steps=13,
-            colors=SliderDefaults.colors(thumbColor=if(focused)T.onAccent else T.accent,activeTrackColor=if(focused)T.onAccent else T.accent,inactiveTrackColor=T.inputBorder,activeTickColor=if(focused)T.accent else T.onAccent,inactiveTickColor=T.surface),
-            onValueChangeFinished={resizeText(fontPercent,true)},
-            modifier=Modifier.fillMaxWidth().height(T.sliderHeight).testTag("font-size").focusRequester(requester)
+        InterfaceScaleSlider(value=fontPercent,onChange={resizeInterface(it)},
+            onFinished={resizeInterface(fontPercent,true)},
+            modifier=Modifier.fillMaxWidth().height(56.dp).testTag("font-size").focusRequester(requester)
                 .onFocusChanged{focused=it.isFocused;if(it.isFocused)panelFocus["appearance"]="font-size"}
-                .then(focusSurface(focused,T.raised))
+                .border(T.focusLine,if(focused)T.accent else Color.Transparent,RoundedCornerShape(10.dp)).padding(horizontal=T.gap)
                 .onPreviewKeyEvent{event->val key=event.nativeKeyEvent
                     if(key.keyCode in listOf(AndroidKey.KEYCODE_DPAD_LEFT,AndroidKey.KEYCODE_DPAD_RIGHT)){
-                        if(key.action==AndroidKey.ACTION_DOWN)resizeText(fontPercent+if(key.keyCode==AndroidKey.KEYCODE_DPAD_RIGHT)5 else -5)
-                        if(key.action==AndroidKey.ACTION_UP)resizeText(fontPercent,true)
+                        if(key.action==AndroidKey.ACTION_DOWN)resizeInterface(fontPercent+if(key.keyCode==AndroidKey.KEYCODE_DPAD_RIGHT)5 else -5)
+                        if(key.action==AndroidKey.ACTION_UP)resizeInterface(fontPercent,true)
                         true
                     }else if(key.keyCode in listOf(AndroidKey.KEYCODE_DPAD_UP,AndroidKey.KEYCODE_DPAD_DOWN)){
                         if(key.keyCode==AndroidKey.KEYCODE_DPAD_DOWN&&key.action==AndroidKey.ACTION_DOWN)languageFocus.requestFocus()
                         true
                     }else false
-                }.semantics{contentDescription=tr("font_size");stateDescription="${fontPercent}%"})
+                }.semantics{contentDescription=tr("interface_scale");stateDescription="${fontPercent}%"})
         Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween){
             Caption(tr("font_smaller"))
             Caption(tr("font_larger"))
         }
+        Spacer(Modifier.height(32.dp))
         Setting(tr("language"),"appearance-language",L10n.available.firstOrNull{it.locale==L10n.language}?.nativeName?:"English",
             modifier=Modifier.focusRequester(languageFocus).onPreviewKeyEvent{event->
                 if(event.nativeKeyEvent.keyCode==AndroidKey.KEYCODE_DPAD_UP){
@@ -1670,14 +1785,14 @@ class MainActivity : ComponentActivity() {
     }}
     @Composable private fun AudioScreen(){
         Setting(tr("audio_language"),"audio-language",when(data.audioLanguage){"ru"->tr("russian");"en"->tr("english");else->tr("original")}){
-            work{change{it.copy(audioLanguage=when(it.audioLanguage){"ru"->"en";"en"->"";else->"ru"})};applyTracks()}
+            persist(updateTracks=true){it.copy(audioLanguage=when(it.audioLanguage){"ru"->"en";"en"->"";else->"ru"})}
         }
-        Setting(tr("subtitles"),"subtitles",if(data.subtitles)tr("on")else tr("off")){work{change{it.copy(subtitles=!it.subtitles)};applyTracks()}}
+        ToggleSetting(tr("subtitles"),"subtitles",data.subtitles){persist(updateTracks=true){it.copy(subtitles=!it.subtitles)}}
         Caption(tr("audio_tracks_and_subtitles_depend_on_the_channel"))
     }
     @Composable private fun MoreScreen(){
         Setting(if(player.isPlaying)tr("pause")else tr("resume"),"pause",""){togglePlayback();closePanels();controls=true}
-        Setting(tr("subtitles"),"subtitles",if(data.subtitles)tr("on")else tr("off")){work{change{it.copy(subtitles=!it.subtitles)};applyTracks()}}
+        ToggleSetting(tr("subtitles"),"subtitles",data.subtitles){persist(updateTracks=true){it.copy(subtitles=!it.subtitles)}}
         Setting(tr("recently_watched"),"history"){selectGroup(BuiltinGroups.RECENT)}
         Setting(tr("settings"),"settings"){openPanel("settings")}
     }
@@ -1701,36 +1816,6 @@ class MainActivity : ComponentActivity() {
         candidate?.let{p->Text(tr("channels_groups", p.channels.size, p.channels.map{it.group}.distinct().size),color=T.success,fontSize=T.caption)}
         Action(if(editingPlaylist==null)tr("add")else tr("save"),key="source-add",enabled=!busy){addSource()}
     }
-    @Composable private fun ColumnScope.FilesScreen(){
-        val fileList=rememberLazyListState()
-        val firstFile=remember{FocusRequester()}
-        val inputMode=androidx.compose.ui.platform.LocalInputModeManager.current
-        LaunchedEffect(folder,files){
-            inputMode.requestInputMode(androidx.compose.ui.input.InputMode.Keyboard)
-            fileList.scrollToItem(0)
-            // The focused directory disappears when its contents replace the lazy list.
-            // Wait for the new first row to be placed before restoring remote focus.
-            repeat(5){delay(60);if(runCatching{firstFile.requestFocus()}.getOrDefault(false))return@LaunchedEffect}
-        }
-        Caption(folder?.name?.ifEmpty{tr("storage")}?:tr("files"))
-        Row(horizontalArrangement=Arrangement.spacedBy(T.small)){
-            Action(tr("import"),Modifier.weight(1f),key="file-import"){listFiles(imports)}
-            Action(tr("folders"),Modifier.weight(1f),key="file-storage"){listFiles(File("/storage"))}
-        }
-        Setting("Downloads","file-downloads"){listFiles(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS))}
-        if(Build.VERSION.SDK_INT>=30&&!Environment.isExternalStorageManager()){
-            Action(tr("allow_access"),Modifier.fillMaxWidth(),key="file-permission"){
-                runCatching{startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,Uri.parse("package:${packageName}")))}.onFailure{error=tr("this_firmware_does_not_support_this_permission")}
-            }
-        }
-        Notice()
-        LazyColumn(Modifier.weight(1f).padding(T.focusGap),state=fileList,verticalArrangement=Arrangement.spacedBy(T.tiny)){
-            item{Setting(tr("parent_folder"),"file-up","↑",modifier=if(files.isEmpty())Modifier.focusRequester(firstFile)else Modifier){folder?.parentFile?.let{listFiles(it)}}}
-            items(files,key={it.path}){f->Setting(f.name,"file:${f.path}",if(f.isDirectory)"›"else"",if(f.isDirectory)tr("folder")else"",modifier=if(f==files.firstOrNull())Modifier.focusRequester(firstFile)else Modifier){if(f.isDirectory)listFiles(f)else readFile(f)}}
-            if(files.isEmpty())item{Caption(tr("no_suitable_files_or_this_folder_is_unavailable"))}
-        }
-        Caption(if(filePurpose=="playlist")"M3U / M3U8"else tr("tvwavebackup_backup_files"))
-    }
     @Composable private fun BackupScreen(){
         Caption(tr("settings_playlists_epg_urls_and_manual_matches_programme_schedules_are"))
         if(!loadFailed)Setting(tr("create_backup"),"export",subtitle=tr("no_password_channels", data.channels.size)){if(!loadFailed)startExport()}
@@ -1741,14 +1826,18 @@ class MainActivity : ComponentActivity() {
         Field(tr("legacy_backup_password"),password,true){password=it.take(128)}
         Action(tr("open_backup"),key="legacy-open",enabled=!busy){decryptBackup()}
     }
-    @Composable private fun RestoreConfirm(){restoreState?.let{s->
-        Text(tr("backup_verified"),color=T.success,fontSize=T.body)
-        Caption(tr("text_size_audio_subtitles", s.fontPercent, s.audioLanguage.ifEmpty{tr("original")}, if(s.subtitles)tr("on")else tr("off")))
-        Caption(tr("playlists_channels_favourites", s.playlists.size, s.channels.size, s.favourites.size))
-        if(s.sources.isNotEmpty())Caption(tr("epg_sources_manual_matches_time_offsets_playlist_bindings_programme_sc", s.sources.size, s.epgBindings.size, s.epgOffsets.size, s.playlistEpgSources.size))
-        Caption(tr("your_current_playlists_and_settings_will_be_replaced_by_this_backup"))
-        Action(tr("restore"),key="restore-apply",enabled=!busy){applyRestore()}
-        Action(tr("cancel_m245"),key="restore-cancel",enabled=!busy){back()}
+    @Composable private fun RestoreConfirm(actions:Boolean=true){restoreState?.let{s->
+        Column(Modifier.fillMaxWidth().testTag("restore-summary"),verticalArrangement=Arrangement.spacedBy(T.tiny)){
+            Text(tr("backup_verified"),color=T.success,fontSize=T.caption,lineHeight=T.caption*1.2f)
+            Text(tr("interface_scale_audio_subtitles", s.fontPercent, s.audioLanguage.ifEmpty{tr("original")}, if(s.subtitles)tr("on")else tr("off")),color=T.muted,fontSize=T.micro,lineHeight=T.micro*1.2f)
+            Text(tr("playlists_channels_favourites", s.playlists.size, s.channels.size, s.favourites.size),color=T.muted,fontSize=T.micro,lineHeight=T.micro*1.2f)
+            if(s.sources.isNotEmpty())Text(tr("epg_sources_manual_matches_time_offsets_playlist_bindings_programme_sc", s.sources.size, s.epgBindings.size, s.epgOffsets.size, s.playlistEpgSources.size),color=T.muted,fontSize=T.micro,lineHeight=T.micro*1.2f)
+            if(data.playlists.isNotEmpty()||data.sources.isNotEmpty())Text(tr("your_current_playlists_and_settings_will_be_replaced_by_this_backup"),color=T.muted,fontSize=T.micro,lineHeight=T.micro*1.2f)
+        }
+        if(actions){
+            Action(tr("restore"),key="restore-apply",enabled=!busy){applyRestore()}
+            Action(tr("cancel_m245"),key="restore-cancel",enabled=!busy){back()}
+        }
     }}
     @Composable private fun ProgrammeDetails(){
         val focus=remember{FocusRequester()};val info=rememberScrollState();val scope=rememberCoroutineScope();val density=LocalDensity.current
@@ -1771,7 +1860,7 @@ class MainActivity : ComponentActivity() {
                     else->false
                 }
             }.focusable()){
-            val width=maxWidth-T.safe*2;val previewWidth=width*.34f
+            val width=maxWidth-T.safe*2;val previewWidth=guidePreviewWidth(width)
             val bottom=T.detailsBottom*maxOf(1f,density.fontScale)
             if(playing==null)Box(Modifier.offset(x=T.safe,y=T.previewTop).width(previewWidth).height(T.previewHeight).background(T.surface,RoundedCornerShape(T.previewRadius)),contentAlignment=Alignment.Center){Caption(tr("live_tv_is_not_playing"))}
             Text(tr("programme_details"),Modifier.offset(x=T.safe,y=T.top),color=T.muted,fontSize=T.caption)
@@ -1916,7 +2005,7 @@ class MainActivity : ComponentActivity() {
         }
         BoxWithConstraints(Modifier.fillMaxSize()){
             val hudMinimum=maxHeight*T.hudFraction
-            if((playback!="playing"&&playback!="paused")||recoveryStatus.isNotEmpty())Text(recoveryStatus.ifEmpty{when(playback){"buffering"->tr("connecting_m225");"paused"->tr("pause");"error"->playbackError;else->tr("playback_stopped")}},Modifier.align(Alignment.Center).widthIn(max=T.recoveryWidth).testTag("playback-status").background(T.hud,RoundedCornerShape(T.radius)).padding(T.pad),color=T.text,fontSize=T.body)
+            if(!archiveLoading&&!(archiveSession!=null&&playback=="buffering")&&((playback!="playing"&&playback!="paused")||recoveryStatus.isNotEmpty()))Text(recoveryStatus.ifEmpty{when(playback){"buffering"->tr("connecting_m225");"paused"->tr("pause");"error"->playbackError;else->tr("playback_stopped")}},Modifier.align(Alignment.Center).widthIn(max=T.recoveryWidth).testTag("playback-status").background(T.hud,RoundedCornerShape(T.radius)).padding(T.pad),color=T.text,fontSize=T.body)
             if(controls){
                 Row(Modifier.fillMaxWidth().padding(horizontal=T.safe,vertical=T.top),horizontalArrangement=Arrangement.SpaceBetween){
                     Text(playing?.name.orEmpty(),Modifier.background(T.hud,RoundedCornerShape(T.radius)).padding(T.small),color=T.text,fontSize=T.description,maxLines=1,overflow=TextOverflow.Ellipsis)

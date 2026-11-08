@@ -1,0 +1,13 @@
+appId: tv.tvwave.app.debug
+---
+- assertVisible:
+    id: search-history-delete-dialog
+- assertVisible:
+    id: search-history-delete-cancel
+    focused: true
+- pressKey: Remote Dpad Right
+- pressKey: Remote Dpad Center
+- assertNotVisible:
+    id: 'search-hit:recent:16'
+- assertNotVisible:
+    id: search-history-delete-dialog

@@ -58,7 +58,7 @@ class LocalizationDeviceTest {
             device.pressDPadDown();node("appearance-language",true);device.pressDPadCenter()
             node("language:ru",true)
             device.pressDPadUp();node("language:en",true);device.pressDPadCenter()
-            node("font-size");assertTrue(device.hasObject(By.text("Font size")))
+            node("font-size");assertTrue(device.hasObject(By.text("Interface scale")))
             assertEquals("en",Repository(ctx).use{it.load().uiLanguage})
             shot("appearance-en")
         }

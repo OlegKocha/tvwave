@@ -5,6 +5,7 @@ appId: tv.tvwave.app.debug
 - pressKey: Remote Dpad Down
 - pressKey: Remote Dpad Down
 - pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Down
 - assertVisible:
     id: epg-interval
     focused: true
@@ -20,7 +21,7 @@ appId: tv.tvwave.app.debug
     id: "epg-source:aad22ede-3a09-3494-b4ad-20ef58a0cfae"
     focused: true
 - repeat:
-    times: 4
+    times: 5
     commands:
       - pressKey: Remote Dpad Down
 - pressKey: Remote Dpad Center
@@ -29,7 +30,7 @@ appId: tv.tvwave.app.debug
 - pressKey: Remote Dpad Center
 - assertVisible: "24 ч"
 - repeat:
-    times: 4
+    times: 5
     commands:
       - pressKey: Remote Dpad Down
 - pressKey: Remote Dpad Center

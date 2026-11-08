@@ -37,6 +37,13 @@ class EpgUpdateService:Service(){
         private const val NOTIFICATION=42
         private const val CHANNEL="epg-updates"
         private fun prefs(c:Context)=c.getSharedPreferences("epg-work",Context.MODE_PRIVATE)
+        // Exception messages can contain personal EPG URLs. Keep only types and app frames.
+        private fun logFailure(stage:String,error:Throwable){
+            val details=generateSequence(error){it.cause}.take(6).joinToString(" <- "){cause->
+                cause.javaClass.simpleName+" "+cause.stackTrace.filter{it.className.startsWith("tv.tvwave.")}.take(4).joinToString(" | ")
+            }
+            android.util.Log.e("TVWaveEPG","$stage: $details")
+        }
         fun pending(c:Context):List<String> = runCatching { val a=JSONArray(prefs(c).getString("queue","[]"));(0 until a.length()).map{a.getString(it)}.distinct().take(10) }.getOrDefault(emptyList())
         fun enqueue(c:Context,ids:List<String>){
             if(ids.isEmpty()||cancelling)return
@@ -46,6 +53,7 @@ class EpgUpdateService:Service(){
         }
         fun resume(c:Context){
             if(pending(c).isNotEmpty())runCatching{enqueue(c,pending(c))}.onFailure{
+                logFailure("resume",it)
                 mutable.value=mutable.value.copy(status=tr("could_not_resume_the_update_try_again_in_settings"))
             }
         }
@@ -90,7 +98,7 @@ class EpgUpdateService:Service(){
                 try{withTimeout(50*60*1000L){runQueue()}}
                 catch(_:TimeoutCancellationException){mutable.value=mutable.value.copy(status=tr("update_paused_it_will_resume_the_next_time_you_open_the_app"))}
                 catch(_:CancellationException){}
-                catch(_:Exception){mutable.value=mutable.value.copy(status=tr("could_not_resume_the_update_open_the_app_and_try_again"))}
+                catch(e:Exception){logFailure("queue",e);mutable.value=mutable.value.copy(status=tr("could_not_resume_the_update_open_the_app_and_try_again"))}
                 finally{
                     activeCall?.cancel();activeCall=null
                     wake?.let{if(it.isHeld)it.release()};wake=null
@@ -180,6 +188,7 @@ class EpgUpdateService:Service(){
                 retrySelection=true
             }catch(e:Exception){
                 if(!currentCoroutineContext().isActive)throw CancellationException()
+                logFailure("source",e)
                 val error=if(e is UserError)e.message.orEmpty()else tr("could_not_update_the_guide_check_your_connection_and_available_storage")
                 mutable.value=mutable.value.copy(failures=mutable.value.failures+(source.id to error),status="${label} · ${error}")
             }finally{

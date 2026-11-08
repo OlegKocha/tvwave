@@ -10,6 +10,8 @@ e2e/fixtures/video.mp4
 
 # Private user content and distributable binaries stay outside source control.
 *.tvwavebackup
+*.tvwb
+*.twb
 *.apk
 .env
 .env.*

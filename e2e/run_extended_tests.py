@@ -16,14 +16,15 @@ for flow in ['playlists','settings','epg-mapping','channels','files','restore']:
  shell('shell','am','force-stop','tv.tvwave.app.debug')
  r=shell('shell','am','instrument','-w','-e','class','tv.tvwave.app.TvNavigationTest#seedForMaestro','-e','rich','true','-e','font','60' if flow=='restore' else str(args.font),'tv.tvwave.app.debug.test/androidx.test.runner.AndroidJUnitRunner');assert b'OK (1 test)' in r.stdout
  if flow=='files':
+  shell('shell','appops','set','tv.tvwave.app.debug','MANAGE_EXTERNAL_STORAGE','allow')
   for name,data in [('qa-bad.m3u8',b'invalid'),('qa-good.m3u8',urllib.request.urlopen('http://127.0.0.1:8765/playlist.m3u8').read())]:
-   f=out/name;f.write_bytes(data);stage_import(name,data)
+   f=out/name;f.write_bytes(data);shell('push',str(f),'/sdcard/Download/'+name)
  if flow=='restore':
   shell('shell','mkdir','-p','/sdcard/Download/TVWave')
   before=set(shell('shell','ls','/sdcard/Download/TVWave').stdout.decode().splitlines())
   if not run('backup-export.yaml','export-before-restore'):continue
   names=set(shell('shell','ls','/sdcard/Download/TVWave').stdout.decode().splitlines())-before
-  exported=[n for n in names if n.startswith('TVWave-') and n.endswith('.tvwavebackup')]
+  exported=[n for n in names if n.startswith('TVWave-') and n.endswith('.tvwb')]
   assert len(exported)==1,exported
   name=exported[0]
   backup=out/'qa-export.tvwavebackup';shell('pull','/sdcard/Download/TVWave/'+name,str(backup))
@@ -34,6 +35,10 @@ for flow in ['playlists','settings','epg-mapping','channels','files','restore']:
   assert not any(k in config for k in ['epgBackup','programmes','epgCache']) and len(content)<10000
   (out/'backup-check.json').write_text(json.dumps({'bytes':len(content),'fontPercent':60,'playlists':1,'epgSources':1,'programmeCache':False,'checksumValid':True},indent=2))
   shell('uninstall','tv.tvwave.app.debug');shell('install',str(project/'app/build/outputs/apk/debug/app-debug.apk'))
-  stage_import('qa-export.tvwavebackup',backup.read_bytes())
- run('extended/'+flow+'.yaml',flow)
+  shell('shell','appops','set','tv.tvwave.app.debug','MANAGE_EXTERNAL_STORAGE','allow')
+  shell('push',str(backup),'/sdcard/Download/qa-export.tvwavebackup')
+ ok=run('extended/'+flow+'.yaml',flow)
+ if flow=='channels' and ok:
+  shell('shell','input','keyevent','--longpress','23')
+  run('extended/search-delete.yaml','search-delete')
 raise SystemExit(0 if all(x['passed'] for x in results) else 1)

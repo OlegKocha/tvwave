@@ -10,61 +10,79 @@ appId: tv.tvwave.app.debug
       - tapOn:
           id: "language:ru"
 - assertVisible: 'Ваши каналы — здесь'
-- pressKey: Remote Dpad Up
+- tapOn:
+    id: restore
 - assertVisible:
-    id: add
+    id: file-list
+- assertNotVisible:
+    id: export
+- tapOn:
+    id: 'file:/storage/emulated/0/Download/TVWave-QA'
+- assertVisible:
+    id: 'file:/storage/emulated/0/Download/TVWave-QA/00-corrupt.tvwb'
     focused: true
-- pressKey: Remote Dpad Down
+# Left goes to the parent and retains the folder focus. Right enters it again.
+- pressKey: Remote Dpad Left
+- assertVisible:
+    id: 'file:/storage/emulated/0/Download/TVWave-QA'
+    focused: true
 - pressKey: Remote Dpad Right
 - assertVisible:
-    id: welcome-settings
+    id: 'file:/storage/emulated/0/Download/TVWave-QA/00-corrupt.tvwb'
     focused: true
-- pressKey: Remote Dpad Center
-- repeat:
-    times: 6
-    commands:
-      - pressKey: Remote Dpad Down
+# Right on a file focuses metadata, not restore. Repeated Right stays there.
+- pressKey: Remote Dpad Right
 - assertVisible:
-    id: backup
+    id: file-details
     focused: true
-- pressKey: Remote Dpad Center
-- tapOn:
-    id: restore
-- tapOn:
-    id: file-downloads
-- tapOn:
-    text: 'TVWave'
+- pressKey: Remote Dpad Right
 - assertVisible:
-    id: 'file:.*\.tvwavebackup'
+    id: file-details
     focused: true
-- repeat:
-    while:
-      notVisible: 'qa-corrupt.tvwavebackup'
-    times: 20
-    commands:
-      - pressKey: Remote Dpad Down
-- tapOn:
-    text: 'qa-corrupt.tvwavebackup'
-- assertVisible: '.*Резервная копия повреждена.*'
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Up
+- assertVisible:
+    id: file-details
+    focused: true
 - assertNotVisible:
     id: restore-apply
-- tapOn:
-    id: restore
-- tapOn:
-    id: file-downloads
-- tapOn: 'TVWave'
+- takeScreenshot: file-metadata-focused
+- pressKey: Remote Dpad Left
 - assertVisible:
-    id: 'file:.*\.tvwavebackup'
+    id: 'file:/storage/emulated/0/Download/TVWave-QA/00-corrupt.tvwb'
     focused: true
-- repeat:
-    while:
-      notVisible: '${BACKUP_NAME}'
-    times: 20
-    commands:
-      - pressKey: Remote Dpad Down
-- tapOn:
-    text: '${BACKUP_NAME}'
+- pressKey: Remote Dpad Center
+- assertVisible: '.*Резервная копия повреждена.*'
+- assertVisible:
+    id: restore-apply
+    enabled: false
+- assertVisible:
+    id: file-error
+- assertVisible:
+    id: restore-cancel
+    focused: true
+- pressKey: Remote Dpad Left
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: 'file:/storage/emulated/0/Download/TVWave-QA/01-valid.tvwb'
+    focused: true
+- pressKey: Remote Dpad Right
+- assertVisible:
+    id: file-details
+    focused: true
+- pressKey: back
+- assertVisible:
+    id: 'file:/storage/emulated/0/Download/TVWave-QA/01-valid.tvwb'
+    focused: true
+- pressKey: Remote Dpad Right
+- pressKey: Remote Dpad Center
 - assertVisible: 'Копия проверена'
+- assertVisible:
+    id: file-list
+- assertVisible:
+    id: restore-apply
+    enabled: true
+    focused: true
 - assertVisible: '.*Плейлистов: 3.*'
 - assertVisible: '.*Источников EPG: 3.*'
 - takeScreenshot: restore-preview

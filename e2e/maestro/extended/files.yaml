@@ -10,12 +10,11 @@ appId: tv.tvwave.app.debug
 - pressKey: Remote Dpad Center
 - tapOn:
     id: choose-file
-- tapOn:
-    id: file-import
 - tapOn: 'qa-bad.m3u8'
 - assertVisible: '.*отсутствует заголовок.*'
-- tapOn:
-    id: choose-file
+# Invalid content stays in the browser so another file can be selected immediately.
+- assertVisible:
+    id: file-list
 - tapOn: 'qa-good.m3u8'
 - assertVisible:
     id: source-add

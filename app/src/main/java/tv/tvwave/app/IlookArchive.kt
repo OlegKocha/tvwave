@@ -8,7 +8,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 /** Verified iLook HLS contract. Tokens remain in the user's original URL, never in logs. */
 object IlookArchive {
     private val NO_RECORDING get() = tr("this_recording_is_unavailable_the_provider_did_not_return_any_video_tr")
-    private val INVALID_RECORDING get() = tr("could_not_open_this_recording_try_again_later")
+    private val INVALID_RECORDING get() = tr("archive_invalid_response")
     private val livePath=Regex("^/iptv/[^/]+/[0-9]+/index\\.m3u8\$")
     fun supports(channel:Channel):Boolean {
         val u=channel.url.toHttpUrlOrNull()?:return false
@@ -26,11 +26,7 @@ object IlookArchive {
         if(!path.contains("/arch/"))return@runCatching null
         path.substringAfterLast('/').removeSuffix(".ts").toLongOrNull()?.takeIf{it in 946684800000L..4102444800000L}
     }.getOrNull()
-    fun responseError(code:Int):String=when(code){
-        401,403->tr("the_source_denied_access_to_the_recording_check_your_subscription")
-        404,410->NO_RECORDING
-        else->tr("could_not_load_the_recording_check_your_connection_and_try_again")
-    }
+    fun responseError(code:Int):String=ArchiveErrors.http(code)
     /** Check the manifest AND the first media segment before replacing current playback. */
     fun open(client:OkHttpClient,channel:Channel,programme:Programme,position:Long,now:Long):ArchiveSession {
         if(!supports(channel))throw UserError(tr("catch_up_is_unavailable_for_this_channel"))
@@ -44,7 +40,8 @@ object IlookArchive {
         val segment=client.newCall(Request.Builder().url(address).header("User-Agent","TVWave/${BuildConfig.VERSION_NAME}").build()).execute().use { response ->
             if(!response.isSuccessful)throw UserError(responseError(response.code))
             val body=response.body?:throw UserError(NO_RECORDING)
-            val text=SourceIO.text(SourceIO.read(body.byteStream(),256*1024))
+            val text=try { SourceIO.text(SourceIO.read(body.byteStream(),256*1024)) }
+                catch(_:UserError){throw UserError(INVALID_RECORDING)}
             if(!text.startsWith("#EXTM3U"))throw UserError(INVALID_RECORDING)
             val first=text.lineSequence().map{it.trim()}.firstOrNull{it.isNotEmpty()&&!it.startsWith("#")}
                 ?:throw UserError(NO_RECORDING)
@@ -52,7 +49,7 @@ object IlookArchive {
         }
         val timestamp=segmentTime(segment)?:throw UserError(INVALID_RECORDING)
         // A live fallback or a different recording must not be presented as the selected programme.
-        if(timestamp<requestStart-10_000L||timestamp>start+10_000L)throw UserError(INVALID_RECORDING)
+        if(timestamp<requestStart-10_000L||timestamp>start+10_000L)throw UserError(tr("archive_wrong_time"))
         client.newCall(Request.Builder().url(segment).header("User-Agent","TVWave/${BuildConfig.VERSION_NAME}").build()).execute().use { response ->
             if(!response.isSuccessful)throw UserError(responseError(response.code))
             if(response.body?.byteStream()?.read()!=0x47)throw UserError(INVALID_RECORDING)

@@ -16,7 +16,9 @@ appId: tv.tvwave.app.debug
 - assertVisible: 'Исходный'
 - pressKey: Remote Dpad Down
 - pressKey: Remote Dpad Center
-- assertVisible: 'Вкл.'
+- assertVisible:
+    id: subtitles
+    checked: true
 - pressKey: back
 - pressKey: Remote Dpad Down
 - pressKey: Remote Dpad Center
@@ -28,7 +30,9 @@ appId: tv.tvwave.app.debug
     id: resume
     focused: true
 - pressKey: Remote Dpad Center
-- assertVisible: 'Вкл.'
+- assertVisible:
+    id: resume
+    checked: true
 - stopApp
 - runFlow: ../open-epg.yaml
 - pressKey: back
@@ -37,4 +41,6 @@ appId: tv.tvwave.app.debug
     commands:
       - pressKey: Remote Dpad Down
 - pressKey: Remote Dpad Center
-- assertVisible: 'Вкл.'
+- assertVisible:
+    id: resume
+    checked: true

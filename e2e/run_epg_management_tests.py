@@ -38,10 +38,10 @@ if a.flow in ['all','backup']:
  before=set(shell('shell','ls','/sdcard/Download/TVWave').stdout.decode().splitlines())
  flow('export','backup-export.yaml')
  names=set(shell('shell','ls','/sdcard/Download/TVWave').stdout.decode().splitlines())-before
- exported=[n for n in names if n.startswith('TVWave-') and n.endswith('.tvwavebackup')]
+ exported=[n for n in names if n.startswith('TVWave-') and n.endswith('.tvwb')]
  assert len(exported)==1,exported
  name=exported[0]
- backup=out/'multi.tvwavebackup';shell('pull','/sdcard/Download/TVWave/'+name,str(backup));content=backup.read_bytes()
+ backup=out/'multi.tvwb';shell('pull','/sdcard/Download/TVWave/'+name,str(backup));content=backup.read_bytes()
  assert content[:8]==b'TVWAVBK3';version,length=struct.unpack('>II',content[8:16]);assert version==3 and length==len(content)-48
  assert hashlib.sha256(content[48:]).digest()==content[16:48]
  config=json.loads(gzip.decompress(content[48:]))
@@ -50,14 +50,16 @@ if a.flow in ['all','backup']:
  assert len(config['playlistEpgSources'])==1 and len(config['epgOffsets'])==2 and len(config['epgBindings'])==1
  assert config['audioLanguage']=='en' and config['subtitles'] and config['epgIntervalHours']==6
  assert len(config['favourites'])==2 and len(config['history'])==2 and config['playlists'][1]['source']==''
- assert not any(k in config for k in ['epgBackup','programmes','epgCache']) and len(content)<10000
+ assert not any(k in config for k in ['epgBackup','programmes','epgCache','recentQueries','searchHistory']) and len(content)<10000
  assert 'Описание передачи' not in json.dumps(config,ensure_ascii=False)
  broken=bytearray(content);broken[-1]^=1;damaged=out/'qa-corrupt.tvwavebackup';damaged.write_bytes(broken)
- shell('push',str(damaged),'/sdcard/Download/TVWave/qa-corrupt.tvwavebackup')
+ shell('shell','mkdir','-p','/sdcard/Download/TVWave-QA')
+ shell('push',str(damaged),'/sdcard/Download/TVWave-QA/00-corrupt.tvwb')
+ shell('push',str(backup),'/sdcard/Download/TVWave-QA/01-valid.tvwb')
  (out/'backup-check.json').write_text(json.dumps({'bytes':len(content),'playlists':3,'epgSources':3,'fontPercent':85,'programmeCache':False,'checksumValid':True,'playlistAssignments':1,'channelOffsets':2,'manualBindings':1},indent=2))
  # Real reinstall. The exported file stays in shared Downloads; no staging/copy into app-private storage.
  shell('uninstall','tv.tvwave.app.debug');shell('install',str(project/'app/build/outputs/apk/debug/app-debug.apk'))
  assert name in shell('shell','ls','/sdcard/Download/TVWave').stdout.decode()
  shell('shell','appops','set','tv.tvwave.app.debug','MANAGE_EXTERNAL_STORAGE','allow')
- flow('restore-empty',env={'BACKUP_NAME':name});native('assertRestoredConfiguration');flow('restore-use')
+ flow('restore-empty',env={'BACKUP_NAME':'01-valid.tvwb'});native('assertRestoredConfiguration');flow('restore-use')
 print('Targeted EPG/backup tests passed',flush=True)

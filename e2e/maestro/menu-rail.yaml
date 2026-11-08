@@ -55,7 +55,7 @@ appId: tv.tvwave.app.debug
     id: main-search
     focused: true
 - pressKey: Remote Dpad Center
-- assertVisible: 'Название канала'
+- assertVisible: 'Канал или передача'
 - pressKey: back
 - pressKey: back
 - assertVisible:

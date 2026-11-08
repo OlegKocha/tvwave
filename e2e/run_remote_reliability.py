@@ -15,8 +15,8 @@ shell('shell','am','force-stop','tv.tvwave.app.debug')
 r=shell('shell','am','instrument','-w','-e','class','tv.tvwave.app.TvNavigationTest#seedForMaestro','-e','sources','10','-e','font','130','tv.tvwave.app.debug.test/androidx.test.runner.AndroidJUnitRunner');assert b'OK (1 test)' in r.stdout
 flow('open')
 for n in range(3):
- shell('shell','input','keyevent',*(['20']*12));flow('footer',f'burst-{n}-down')
- shell('shell','input','keyevent',*(['19']*12));flow('top',f'burst-{n}-up')
+ shell('shell','input','keyevent',*(['20']*13));flow('footer',f'burst-{n}-down')
+ shell('shell','input','keyevent',*(['19']*13));flow('top',f'burst-{n}-up')
 flow('keyboard')
 shell('shell','input','keyevent','223');time.sleep(1);shell('shell','input','keyevent','224');shell('shell','wm','dismiss-keyguard');flow('top','wake-focus')
 flow('update')

@@ -52,7 +52,15 @@ env:
           focused: true
       - pressKey: Remote Dpad Down
       - assertVisible:
+          id: "epg-auto-update"
+          focused: true
+      - pressKey: Remote Dpad Down
+      - assertVisible:
           id: "epg-interval"
+          focused: true
+      - pressKey: Remote Dpad Up
+      - assertVisible:
+          id: "epg-auto-update"
           focused: true
       - pressKey: Remote Dpad Up
       - assertVisible:

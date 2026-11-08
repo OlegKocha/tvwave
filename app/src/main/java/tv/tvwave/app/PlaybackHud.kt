@@ -71,8 +71,10 @@ fun PlaybackHud(
             HudButton("player-subtitles",tr("subtitles"),if(subtitles)tr("on")else tr("off"),"subtitles",true,subtitles,wanted,requests,onFocus,onAction)
             HudButton("player-favourite",tr("favourites"),if(favourite)tr("added")else tr("add"),"star",true,favourite,wanted,requests,onFocus,onAction)
         }
-        Box(Modifier.fillMaxWidth()){
-            Row(Modifier.align(Alignment.Center),horizontalArrangement=Arrangement.spacedBy(T.small),verticalAlignment=Alignment.CenterVertically){
+        BoxWithConstraints(Modifier.fillMaxWidth()){
+            // At a larger interface scale, keep the playback buttons clear of buffer/live actions.
+            val transportAlignment=if(maxWidth<800.dp)Alignment.CenterStart else Alignment.Center
+            Row(Modifier.align(transportAlignment),horizontalArrangement=Arrangement.spacedBy(T.small),verticalAlignment=Alignment.CenterVertically){
                 HudButton("player-rewind",tr("1_min"),null,"rewind",canRewind,false,wanted,requests,onFocus,onAction,true,showLabel=false)
                 HudButton("player-pause",playLabel,null,if(paused)"play"else"pause",true,false,wanted,requests,onFocus,onAction,true,showLabel=false)
                 HudButton("player-forward",tr("1_min_m366"),null,"forward",canForward,false,wanted,requests,onFocus,onAction,true,showLabel=false)

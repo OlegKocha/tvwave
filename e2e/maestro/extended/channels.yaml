@@ -34,13 +34,47 @@ appId: tv.tvwave.app.debug
 - pressKey: Remote Dpad Up
 - pressKey: Remote Dpad Center
 - inputText: '16'
-- hideKeyboard
-- assertVisible: 'Найдено: 1'
-- pressKey: Remote Dpad Down
-- pressKey: Remote Dpad Down
+- assertNotVisible:
+    id: search-channels-heading
+- pressKey: Enter
+- assertVisible: 'Каналы · 1'
 - assertVisible:
     id: search-results
     focused: true
 - pressKey: Remote Dpad Center
-- assertVisible: 'Все каналы · 1'
+- assertVisible: 'Все каналы · 16'
 - pressKey: back
+- pressKey: back
+- tapOn:
+    id: main-search
+- assertVisible:
+    id: search-recent-heading
+- assertVisible:
+    id: 'search-hit:recent:16'
+- assertNotVisible:
+    id: search-channels-heading
+- pressKey: Remote Dpad Right
+- pressKey: Remote Dpad Center
+- assertVisible: 'Каналы · 1'
+- tapOn:
+    id: search-nav-tv
+- pressKey: back
+- pressKey: back
+- tapOn:
+    id: main-search
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: search-nav-tv
+    focused: true
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: search-nav-favourites
+    focused: true
+- pressKey: Remote Dpad Up
+- pressKey: Remote Dpad Up
+- pressKey: Remote Dpad Right
+- assertVisible:
+    id: search-results
+    focused: true
+- assertVisible:
+    id: search-recent-heading

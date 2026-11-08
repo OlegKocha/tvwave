@@ -2,7 +2,7 @@
 """Run D-pad tests on a named emulator only. Refuses physical device serials."""
 from pathlib import Path
 import argparse,subprocess,time,json,re
-p=argparse.ArgumentParser();p.add_argument('--device',default='emulator-5556');p.add_argument('--mode',choices=['native','maestro','all'],default='all');p.add_argument('--cycles',type=int,default=3);p.add_argument('--output',required=True);args=p.parse_args()
+p=argparse.ArgumentParser();p.add_argument('--device',default='emulator-5556');p.add_argument('--mode',choices=['native','maestro','all'],default='all');p.add_argument('--cycles',type=int,default=3);p.add_argument('--output',required=True);p.add_argument('--flow',action='append',help='Run only selected Maestro flows');args=p.parse_args()
 if not re.fullmatch(r'emulator-\d+',args.device):p.error('Only explicit emulator serials are permitted')
 project=Path(__file__).resolve().parents[1];workspace=project.parents[2];out=Path(args.output).resolve();out.mkdir(parents=True,exist_ok=True)
 adb=[str(workspace/'work/android-tools/sdk/platform-tools/adb'),'-s',args.device];results=[]
@@ -31,6 +31,7 @@ if args.mode in ['native','all']:
   (out/'results.json').write_text(json.dumps(results,indent=2))
 if args.mode in ['maestro','all']:
  for flow,count in [('epg-roundtrip',10),('epg-interval',1),('epg-edit-cancel',1),('backup-export',1),('import-playlist',1),('import-playlist-direct',1),('player',1),('appearance',1)]:
+  if args.flow and flow not in args.flow:continue
   ok,_=instrument('seedForMaestro',count,name='seed-'+flow)
   if not ok:raise RuntimeError('Fixture setup failed')
   cmd=['python3',str(workspace/'work/qa-emulator/maestro.py'),'test','--device',args.device,'--format','JUNIT','--output',str(out/(flow+'.xml')),'--test-output-dir',str(out/flow),'-e','CYCLES='+str(args.cycles),str(project/'e2e/maestro'/(flow+'.yaml'))]

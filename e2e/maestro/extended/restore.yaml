@@ -13,20 +13,16 @@ appId: tv.tvwave.app.debug
     id: add
 - tapOn:
     id: restore
-- assertVisible: 'Резервная копия'
-- tapOn: 'Восстановить из файла'
-- tapOn:
-    id: file-import
+- assertVisible:
+    id: file-list
 - tapOn:
     text: 'qa-export.tvwavebackup'
 - assertVisible: 'Копия проверена'
 - assertVisible: '.*Каналов: 16.*'
 - tapOn:
     id: restore-cancel
-- assertVisible: 'Резервная копия'
-- tapOn: 'Восстановить из файла'
-- tapOn:
-    id: file-import
+- assertVisible:
+    id: file-list
 - tapOn:
     text: 'qa-export.tvwavebackup'
 - tapOn:
