@@ -1,0 +1,89 @@
+appId: tv.tvwave.app.debug
+---
+- launchApp
+- assertVisible:
+    id: guide-brand
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Left
+- pressKey: Remote Dpad Left
+- pressKey: Remote Dpad Up
+- assertVisible:
+    id: main-search
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: search-input
+    focused: true
+- pressKey: Remote Dpad Center
+- inputText: "1"
+- assertNotVisible:
+    id: search-channels-heading
+- pressKey: Enter
+- assertVisible:
+    id: search-channels-heading
+- assertVisible:
+    id: search-results
+    focused: true
+- takeScreenshot: search-submitted
+- pressKey: Remote Dpad Left
+- assertVisible:
+    id: search-input
+    focused: true
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: main-tv
+    focused: true
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: main-favourites
+    focused: true
+- pressKey: Remote Dpad Up
+- pressKey: Remote Dpad Up
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: search-input
+    focused: true
+- assertVisible:
+    id: search-recent-heading
+- pressKey: Remote Dpad Right
+- assertVisible:
+    id: search-results
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: search-channels-heading
+- takeScreenshot: search-history-repeated
+# Leaving settings opened from Search returns to TV, including nested settings.
+- pressKey: Remote Dpad Left
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: main-settings
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: playlists
+    focused: true
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: font-size
+    focused: true
+- pressKey: back
+- assertVisible:
+    id: appearance
+    focused: true
+- pressKey: back
+- assertVisible:
+    id: guide-brand
+- assertNotVisible:
+    id: global-search
+- pressKey: Remote Dpad Left
+- pressKey: Remote Dpad Left
+- assertVisible:
+    id: main-tv
+    focused: true
+- takeScreenshot: search-settings-return-tv

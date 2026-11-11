@@ -30,7 +30,7 @@ if args.mode in ['native','all']:
   for f in files:run(adb+['pull','/sdcard/Android/data/tv.tvwave.app.debug/files/'+f,str(out/f)])
   (out/'results.json').write_text(json.dumps(results,indent=2))
 if args.mode in ['maestro','all']:
- for flow,count in [('epg-roundtrip',10),('epg-interval',1),('epg-edit-cancel',1),('backup-export',1),('import-playlist',1),('import-playlist-direct',1),('player',1),('appearance',1)]:
+ for flow,count in [('epg-roundtrip',10),('epg-interval',1),('epg-edit-cancel',1),('backup-export',1),('import-playlist',1),('import-playlist-direct',1),('player',1),('appearance',1),('search',1),('reminder-settings',1)]:
   if args.flow and flow not in args.flow:continue
   ok,_=instrument('seedForMaestro',count,name='seed-'+flow)
   if not ok:raise RuntimeError('Fixture setup failed')

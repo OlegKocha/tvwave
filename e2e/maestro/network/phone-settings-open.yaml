@@ -10,6 +10,10 @@ appId: tv.tvwave.app.debug
     focused: true
 - pressKey: Remote Dpad Down
 - pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: main-settings
+    focused: true
 - pressKey: Remote Dpad Center
 - assertVisible:
     id: playlists

@@ -56,13 +56,34 @@ appId: tv.tvwave.app.debug
     focused: true
 - pressKey: Remote Dpad Center
 - assertVisible: 'Канал или передача'
+- assertVisible:
+    id: search-input
+    focused: true
+- takeScreenshot: search-menu
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: main-tv
+    focused: true
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: main-favourites
+    focused: true
+- pressKey: Remote Dpad Up
+- pressKey: Remote Dpad Up
+- assertVisible:
+    id: main-search
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: search-input
+    focused: true
 - pressKey: back
 - pressKey: back
 - assertVisible:
     id: main-search
     focused: true
 - repeat:
-    times: 3
+    times: 4
     commands:
       - pressKey: Remote Dpad Down
 - assertVisible:

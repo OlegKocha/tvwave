@@ -1,5 +1,8 @@
 package tv.tvwave.app
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.graphics.graphicsLayer
 import android.view.KeyEvent
 import android.view.ViewConfiguration
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -26,6 +29,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.*
@@ -38,6 +42,7 @@ import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.delay
 
 class GuideSearchState {
+    var visitRevision by mutableIntStateOf(0)
     var query by mutableStateOf("")
     var submittedQuery by mutableStateOf("")
     var searchRevision by mutableIntStateOf(0)
@@ -50,7 +55,7 @@ class GuideSearchState {
         submittedQuery=query.trim();selectedKey="";searchRevision++
     }
     fun beginVisit(recent:List<String>) {
-        query="";submittedQuery="";selectedKey="";returnToResults=false
+        visitRevision++;query="";submittedQuery="";selectedKey="";returnToResults=false
         results=GuideSearchResults();completedQuery="";recentQueries=recent
     }
 }
@@ -60,14 +65,15 @@ private data class SearchEntry(val key:String,val channel:Channel,val programme:
 @OptIn(ExperimentalFoundationApi::class)
 @Composable fun SearchScreen(
     state:GuideSearchState,loading:Boolean,error:String,detail:Programme?,
-    brand:@Composable ()->Unit,
+    navigation:@Composable (Modifier,FocusRequester,FocusRequester,@Composable ()->Unit)->Unit,
+    registerBack:((()->Boolean)?)->Unit,
     field:@Composable (Modifier,Boolean,()->Unit,(Boolean)->Unit)->Unit,
     logo:@Composable (Channel,Color)->Unit,
     archiveAvailable:(Channel,Programme)->Boolean,
     span:(Programme)->String,now:Long,hasEpg:Boolean,
     onSelected:(Channel,Programme?)->Unit,onOpen:(Channel,Programme?)->Unit,
-    onRememberQuery:(String)->Unit,onRemoveQuery:(String)->Unit,
-    onTv:()->Unit,onFavourites:()->Unit,onSettings:()->Unit
+    onReminder:(Channel,Programme)->Unit,
+    onRememberQuery:(String)->Unit,onRemoveQuery:(String)->Unit
 ) {
     val ready=state.completedQuery==state.submittedQuery
     val results=if(ready)state.results else GuideSearchResults()
@@ -75,8 +81,13 @@ private data class SearchEntry(val key:String,val channel:Channel,val programme:
     val index=entries.indexOfFirst{it.key==state.selectedKey}.coerceAtLeast(0)
     val selected=entries.getOrNull(index)
     val list=rememberLazyListState()
+    val reminderScope=rememberCoroutineScope()
+    val reminderPress=remember{ProgrammeOkPress(reminderScope)}
+    DisposableEffect(Unit){onDispose{reminderPress.cancel()}}
     val listFocus=remember{FocusRequester()};val inputFocus=remember{FocusRequester()};val detailFocus=remember{FocusRequester()}
-    val tvFocus=remember{FocusRequester()};val favouritesFocus=remember{FocusRequester()};val settingsFocus=remember{FocusRequester()}
+    val tvFocus=remember{FocusRequester()};val navFocus=remember{FocusRequester()}
+    var sidebarFocused by remember{mutableStateOf(false)}
+    var inputFocused by remember{mutableStateOf(false)}
     val keyboard=LocalSoftwareKeyboardController.current
     var resultsFocused by remember{mutableStateOf(false)}
     val restoreResults=remember{state.returnToResults}
@@ -126,15 +137,6 @@ private data class SearchEntry(val key:String,val channel:Channel,val programme:
     fun moveToResults(){
         if(if(showingHistory)state.recentQueries.isNotEmpty()else entries.isNotEmpty())focusResults()
     }
-    fun sidebarNavigation(up:FocusRequester,down:FocusRequester?)=Modifier.onPreviewKeyEvent{event->
-        val key=event.nativeKeyEvent
-        when(key.keyCode){
-            KeyEvent.KEYCODE_DPAD_UP->{if(key.action==KeyEvent.ACTION_DOWN)up.requestFocus();true}
-            KeyEvent.KEYCODE_DPAD_DOWN->{if(key.action==KeyEvent.ACTION_DOWN)down?.requestFocus();true}
-            KeyEvent.KEYCODE_DPAD_RIGHT->{if(key.action==KeyEvent.ACTION_DOWN)moveToResults();true}
-            else->false
-        }
-    }
     fun choose(index:Int){entries.getOrNull(index)?.let{state.selectedKey=it.key}}
     fun repeatQuery(query:String){state.query=query;submitSearch()}
     fun open(){
@@ -157,9 +159,17 @@ private data class SearchEntry(val key:String,val channel:Channel,val programme:
 
         }
     }
-    LaunchedEffect(Unit){
-        if(restoreResults){delay(180);listFocus.requestFocus()}
-        else if(state.recentQueries.isNotEmpty()){delay(180);inputFocus.requestFocus()}
+    LaunchedEffect(state.visitRevision){
+        withFrameNanos{}
+        if(restoreResults)listFocus.requestFocus()else inputFocus.requestFocus()
+    }
+    DisposableEffect(sidebarFocused,inputFocused){
+        registerBack {
+            if(!sidebarFocused){inputFocus.requestFocus();true}
+            else if(inputFocused){keyboard?.hide();navFocus.requestFocus();true}
+            else false
+        }
+        onDispose{registerBack(null)}
     }
     fun status(channel:Channel,p:Programme)=when {
         p.start>now->tr("search_upcoming")
@@ -167,29 +177,27 @@ private data class SearchEntry(val key:String,val channel:Channel,val programme:
         archiveAvailable(channel,p)->tr("search_recording")
         else->tr("search_no_recording")
     }
-    Column(Modifier.fillMaxSize().background(T.bg).padding(T.pad).testTag("global-search"),verticalArrangement=Arrangement.spacedBy(T.gap)) {
-        Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(T.pad)) {
-            Box(Modifier.width(T.searchSidebarWidth)){brand()}
-            Text(tr("search"),color=T.text,fontSize=T.title,fontWeight=FontWeight.SemiBold)
+    val slide=remember{Animatable(32f)}
+    val density=LocalDensity.current.density
+    LaunchedEffect(Unit){slide.animateTo(0f,tween(180))}
+    val menuWidth=T.leftMainWidth*maxOf(1f,LocalDensity.current.fontScale)
+    Row(Modifier.fillMaxSize().background(T.bg).testTag("global-search")) {
+        navigation(Modifier.width(menuWidth).fillMaxHeight().onFocusChanged{sidebarFocused=it.hasFocus}
+            .focusProperties{right=listFocus},navFocus,tvFocus){
+            field(Modifier.testTag("search-input").focusRequester(inputFocus).onPreviewKeyEvent{event->
+                val key=event.nativeKeyEvent
+                when(key.keyCode){
+                    KeyEvent.KEYCODE_DPAD_DOWN->{if(key.action==KeyEvent.ACTION_DOWN){keyboard?.hide();tvFocus.requestFocus()};true}
+                    KeyEvent.KEYCODE_DPAD_RIGHT->{if(key.action==KeyEvent.ACTION_DOWN)moveToResults();true}
+                    else->false
+                }
+            },false,{submitSearch()},{inputFocused=it;if(it)state.returnToResults=false})
         }
+        Column(Modifier.weight(1f).fillMaxHeight().graphicsLayer{translationX=slide.value*density}.padding(start=T.pad,end=T.pad,top=T.drawerTop,bottom=T.drawerBottom),verticalArrangement=Arrangement.spacedBy(T.gap)){
+        Text(tr("search"),Modifier.height(reminderHeaderHeight(LocalDensity.current.fontScale)),color=T.text,fontSize=T.title,fontWeight=FontWeight.SemiBold)
         Row(Modifier.weight(1f),horizontalArrangement=Arrangement.spacedBy(T.gap)) {
-            Column(Modifier.width(T.searchSidebarWidth).fillMaxHeight().background(T.surface,RoundedCornerShape(T.previewRadius)).padding(T.small),verticalArrangement=Arrangement.spacedBy(T.gap)) {
-                field(Modifier.testTag("search-input").focusRequester(inputFocus).onPreviewKeyEvent{event->
-                    val key=event.nativeKeyEvent
-                    when(key.keyCode){
-                        KeyEvent.KEYCODE_DPAD_DOWN->{if(key.action==KeyEvent.ACTION_DOWN){keyboard?.hide();tvFocus.requestFocus()};true}
-                        KeyEvent.KEYCODE_DPAD_RIGHT->{if(key.action==KeyEvent.ACTION_DOWN)moveToResults();true}
-                        else->false
-                    }
-                },!restoreResults&&state.recentQueries.isEmpty(),{submitSearch()},{if(it)state.returnToResults=false})
-                SearchNav(tr("search"),"search-nav-input",sidebarNavigation(inputFocus,tvFocus)){inputFocus.requestFocus()}
-                SearchNav(tr("tv"),"search-nav-tv",Modifier.focusRequester(tvFocus).then(sidebarNavigation(inputFocus,favouritesFocus)),onClick=onTv)
-                SearchNav(BuiltinGroups.label(BuiltinGroups.FAVOURITES),"search-nav-favourites",Modifier.focusRequester(favouritesFocus).then(sidebarNavigation(tvFocus,settingsFocus)),onClick=onFavourites)
-                Spacer(Modifier.weight(1f))
-                SearchNav(tr("settings"),"search-nav-settings",Modifier.focusRequester(settingsFocus).then(sidebarNavigation(favouritesFocus,null)),onClick=onSettings)
-            }
             Column(Modifier.weight(T.searchResultsWeight).fillMaxHeight().testTag("search-results")
-                .focusRequester(listFocus).onFocusChanged{resultsFocused=it.isFocused;if(!it.isFocused)pressedRecent=null}
+                .focusRequester(listFocus).onFocusChanged{resultsFocused=it.isFocused;if(!it.isFocused){pressedRecent=null;reminderPress.cancel()}}
                 .onPreviewKeyEvent{event->
                     val key=event.nativeKeyEvent
                     when(key.keyCode) {
@@ -219,7 +227,9 @@ private data class SearchEntry(val key:String,val channel:Channel,val programme:
                                         pressedRecent=null
                                     }
                                 }
-                            }else if(key.action==KeyEvent.ACTION_DOWN&&key.repeatCount==0)open()
+                            }else reminderPress.handle(key,{open()},{
+                                selected?.let{entry->(entry.programme?:detail)?.let{onReminder(entry.channel,it)}}
+                            })
                             true
                         }
                         else->false
@@ -273,6 +283,7 @@ private data class SearchEntry(val key:String,val channel:Channel,val programme:
                     Text(p?.title?:selected.channel.name,Modifier.testTag("search-detail-title"),color=T.text,fontSize=T.searchTitle,fontWeight=FontWeight.SemiBold,maxLines=3,overflow=TextOverflow.Ellipsis)
                     if(p!=null){
                         Text(span(p),color=T.muted,fontSize=T.micro)
+                        if(p.start>now)Text(tr("reminder_hold_hint"),color=T.accent,fontSize=T.micro)
                         Text(status(selected.channel,p),Modifier.testTag("search-detail-status"),color=if(archiveAvailable(selected.channel,p))T.success else T.muted,fontSize=T.caption)
                     }
                     Text(p?.description?.ifBlank{tr("the_epg_source_did_not_provide_a_description")}?:tr("no_programme_guide_yet"),color=T.muted,fontSize=T.caption,lineHeight=T.caption*1.35f,maxLines=9,overflow=TextOverflow.Ellipsis)
@@ -283,7 +294,7 @@ private data class SearchEntry(val key:String,val channel:Channel,val programme:
                 }else Text(tr("search_select_result"),color=T.muted,fontSize=T.caption)
             }
         }
-        Text(tr(if(showingHistory&&state.recentQueries.isNotEmpty())"search_history_hint" else "search_remote_hint"),color=T.muted,fontSize=T.micro,maxLines=1,overflow=TextOverflow.Ellipsis)
+    }
     }
     pendingDeletion?.let{query->
         SearchHistoryDeleteDialog(query,deletionOpeningDownTime,onDismiss={dismissDeletion()},onDelete={
@@ -364,7 +375,7 @@ private data class SearchEntry(val key:String,val channel:Channel,val programme:
         .border(T.focusLine,if(focused)T.text else Color.Transparent,RoundedCornerShape(T.radius))
         .clickable(interactionSource=remember{MutableInteractionSource()},indication=null,onClick=onClick).padding(T.small),
         verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(T.small)){
-        val icon=when(key){"search-nav-input"->"search";"search-nav-tv"->"tv";"search-nav-favourites"->"favourites";"search-nav-settings"->"settings";else->null}
+        val icon=when(key){"search-nav-input"->"search";"search-nav-tv"->"tv";"search-nav-favourites"->"favourites";"search-nav-settings"->"settings";"search-nav-reminders"->"reminders";else->null}
         if(icon!=null)MenuIcon(icon,fg,Modifier.size(T.menuIcon))
         Text(label,Modifier.weight(1f),color=fg,fontSize=T.caption,maxLines=2,overflow=TextOverflow.Ellipsis)
     }

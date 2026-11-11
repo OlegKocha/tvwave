@@ -1,0 +1,48 @@
+appId: tv.tvwave.app.debug
+---
+- runFlow: open-epg.yaml
+- pressKey: back
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: font-size
+    focused: true
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: appearance-reminders
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible: "Когда напоминать"
+- assertVisible:
+    id: "reminder-minute:5"
+    focused: true
+- repeat:
+    times: 4
+    commands:
+      - pressKey: Remote Dpad Down
+      - pressKey: Remote Dpad Center
+- assertVisible:
+    id: "reminder-minute:60"
+    focused: true
+- takeScreenshot: reminder-times-all
+- pressKey: back
+- pressKey: back
+- assertVisible:
+    id: appearance
+    focused: true
+- pressKey: back
+- assertVisible:
+    id: main-settings
+    focused: true
+- pressKey: Remote Dpad Up
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: reminders-page
+- pressKey: back
+- pressKey: Remote Dpad Left
+- pressKey: Remote Dpad Left
+- assertVisible:
+    id: main-tv
+    focused: true
+- takeScreenshot: reminder-return-tv

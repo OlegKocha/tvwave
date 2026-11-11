@@ -11,8 +11,8 @@ android {
         applicationId = "tv.tvwave.app"
         minSdk = 23
         targetSdk = 36
-        versionCode = 43
-        versionName = "0.8.0"
+        versionCode = 44
+        versionName = "0.8.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     signingConfigs {

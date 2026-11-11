@@ -59,6 +59,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.focusable
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -77,6 +78,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.KeyboardActions
@@ -164,6 +166,29 @@ class MainActivity : ComponentActivity() {
     private val recentOrder=RecentOrder()
     private var epgRevision by mutableIntStateOf(0)
     private var epgRows by mutableStateOf<Map<String,List<Programme>>>(emptyMap())
+    private val reminderStore by lazy {ProgrammeReminders(getSharedPreferences("programme_reminders",MODE_PRIVATE))}
+    private var reminders by mutableStateOf<List<ProgrammeReminder>>(emptyList())
+    private var reminderDialog by mutableStateOf<ProgrammeReminder?>(null)
+    private var activeReminder by mutableStateOf<ProgrammeReminder?>(null)
+    private var reminderSeconds by mutableIntStateOf(15)
+    private var reminderInteracted by mutableStateOf(false)
+    private var reminderNavRevision by mutableIntStateOf(0)
+    private var reminderEntryRevision by mutableIntStateOf(0)
+    private var reminderSidebarFocused by mutableStateOf(false)
+    private var reminderBack: (() -> Boolean)? = null
+    private var searchBack: (() -> Boolean)? = null
+    private var reminderNow by mutableLongStateOf(System.currentTimeMillis())
+    private val programmeOk by lazy {ProgrammeOkPress(lifecycleScope)}
+    private fun saveReminders(items:List<ProgrammeReminder>){reminders=items.sortedBy{it.start};reminderStore.save(reminders)}
+    private fun requestReminder(channel:Channel,p:Programme){
+        if(p.start<=System.currentTimeMillis()){message=tr("reminder_future_only");return}
+        reminderDialog=ProgrammeReminder(channel.id,channel.name,p.start,p.end,p.title)
+    }
+    private fun requestSelectedReminder(){
+        val c=data.channels.firstOrNull{it.id==selectedChannel}?:return
+        selectedProgramme()?.let{requestReminder(c,it)}
+    }
+    private fun showReminders(){reminderNavRevision=0;reminderEntryRevision++;backgroundScreen="guide";panelStack.clear();screen="reminders";error="";message=""}
     private var nowTime by mutableLongStateOf(System.currentTimeMillis())
     private var guideTime by mutableLongStateOf(0L)
     private val guideSearch=GuideSearchState()
@@ -240,7 +265,10 @@ class MainActivity : ComponentActivity() {
         // Keep platform decoders first; fall back to FFmpeg when a TV lacks an audio codec (e.g. MP2).
         val renderers=DefaultRenderersFactory(this)
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
-        player=ExoPlayer.Builder(this,renderers).setMediaSourceFactory(PlaybackSources(androidx.media3.datasource.DefaultDataSource.Factory(this,OkHttpDataSource.Factory(http).setUserAgent("TVWave/${BuildConfig.VERSION_NAME}"))).setLoadErrorHandlingPolicy(object:DefaultLoadErrorHandlingPolicy(0){override fun getRetryDelayMsFor(info:androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo)=C.TIME_UNSET})).build()
+        // Media requests can remain open while the player consumes its buffer.
+        // Keep connection/read timeouts, but no deadline for the entire stream.
+        val playbackHttp=http.newBuilder().callTimeout(0,TimeUnit.MILLISECONDS).build()
+        player=ExoPlayer.Builder(this,renderers).setMediaSourceFactory(PlaybackSources(androidx.media3.datasource.DefaultDataSource.Factory(this,OkHttpDataSource.Factory(playbackHttp).setUserAgent("TVWave/${BuildConfig.VERSION_NAME}"))).setLoadErrorHandlingPolicy(object:DefaultLoadErrorHandlingPolicy(0){override fun getRetryDelayMsFor(info:androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo)=C.TIME_UNSET})).build()
         playbackDiagnostics=PlaybackDiagnostics(player,lifecycleScope)
         playbackDisplayMode=PlaybackDisplayMode(this,player)
         player.setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(),true)
@@ -591,7 +619,11 @@ class MainActivity : ComponentActivity() {
     }
     private fun openPanel(page:String) {
         if(page=="updates"&&screen!=page)appUpdates.beginVisit()
-        if(screen in listOf("guide","player")){backgroundScreen=screen;panelStack.clear()}
+        if(page=="settings"&&screen=="search"){
+            guideSearch.returnToResults=false;query="";guideTime=0L;guideZone=0
+            backgroundScreen="guide";panelStack.clear();panelFocus["main"]="main-tv"
+        }
+        else if(screen in listOf("guide","player")){backgroundScreen=screen;panelStack.clear()}
         else if(screen!=page)panelStack.add(screen)
         screen=page;error="";message=""
     }
@@ -601,6 +633,8 @@ class MainActivity : ComponentActivity() {
         panelStack.clear();screen="main";error="";message=""
     }
     private fun back() {
+        if(reminderDialog!=null){reminderDialog=null;return}
+        if(activeReminder!=null){activeReminder=null;return}
         if(applying)return
         if(archiveLoadJob?.isActive==true){cancelArchiveLoad();message="";return}
         if(pendingProgramme!=null){pendingProgramme=null;interaction++;return}
@@ -616,8 +650,9 @@ class MainActivity : ComponentActivity() {
             "guide" -> if(guideZone==1||guideTime!=0L){guideZone=0;guideTime=0L}else openPanel("groups")
             "browse" -> {screen="player";controls=true;interaction++}
             "details" -> {guideTime=0L;guideZone=0;browseZone=0;if(detailsReturn=="search")guideSearch.returnToResults=true;screen=detailsReturn;interaction++}
-            "search" -> {rememberSearch();guideSearch.returnToResults=false;query="";screen=if(panelStack.isNotEmpty())panelStack.removeAt(panelStack.lastIndex)else "main";error="";message=""}
-            "groups" -> showMainMenu()
+            "search" -> if(searchBack?.invoke()!=true){rememberSearch();guideSearch.returnToResults=false;query="";screen=if(panelStack.isNotEmpty())panelStack.removeAt(panelStack.lastIndex)else "main";error="";message=""}
+            "reminders" -> if(reminderBack?.invoke()==true){}else if(reminderSidebarFocused){panelStack.clear();backgroundScreen="guide";screen="guide"}else{reminderNavRevision++}
+            "groups" -> {panelFocus["main"]="main-tv";showMainMenu()}
             "main" -> {
                 if(exitConfirmation.press(SystemClock.elapsedRealtime()))finish()
                 else {exitHint=true;exitHintRevision++}
@@ -642,6 +677,7 @@ class MainActivity : ComponentActivity() {
         return super.dispatchKeyEvent(event)
     }
     private fun handleRemote(event:AndroidKey):Boolean {
+        if(event.action==AndroidKey.ACTION_DOWN&&event.keyCode !in listOf(AndroidKey.KEYCODE_DPAD_CENTER,AndroidKey.KEYCODE_ENTER))programmeOk.cancel()
         // Compose focus navigation consumes remote Back as an "exit focus group"
         // before Activity BackHandler. Own both edges so it navigates exactly once.
         // An open IME still gets its pre-IME Back first and closes normally.
@@ -653,11 +689,12 @@ class MainActivity : ComponentActivity() {
         if(screen in listOf("groups","main") && event.keyCode in listOf(AndroidKey.KEYCODE_DPAD_LEFT,AndroidKey.KEYCODE_DPAD_RIGHT)){
             if(event.action==AndroidKey.ACTION_DOWN && event.repeatCount==0){
                 if(screen=="groups"){
-                    if(event.keyCode==AndroidKey.KEYCODE_DPAD_LEFT)showMainMenu()else closePanels()
+                    if(event.keyCode==AndroidKey.KEYCODE_DPAD_LEFT){panelFocus["main"]="main-tv";showMainMenu()}else closePanels()
                 } else if(event.keyCode==AndroidKey.KEYCODE_DPAD_RIGHT){screen="groups"}
             }
             return true
         }
+        if(reminderDialog!=null||activeReminder!=null)return false
         if(pendingProgramme!=null||archiveEnded)return false
         if(screen=="player"&&event.keyCode in listOf(AndroidKey.KEYCODE_DPAD_LEFT,AndroidKey.KEYCODE_DPAD_RIGHT,AndroidKey.KEYCODE_DPAD_UP,AndroidKey.KEYCODE_DPAD_DOWN)){
             if(event.action==AndroidKey.ACTION_DOWN){
@@ -1078,7 +1115,10 @@ class MainActivity : ComponentActivity() {
         if(screen!="guide" || data.playlists.isEmpty())return false
         val keys=listOf(AndroidKey.KEYCODE_DPAD_UP,AndroidKey.KEYCODE_DPAD_DOWN,AndroidKey.KEYCODE_DPAD_LEFT,AndroidKey.KEYCODE_DPAD_RIGHT,AndroidKey.KEYCODE_DPAD_CENTER,AndroidKey.KEYCODE_ENTER)
         if(event.keyCode !in keys)return false
+        if(event.keyCode in listOf(AndroidKey.KEYCODE_DPAD_CENTER,AndroidKey.KEYCODE_ENTER)&&guideZone==1)
+            return programmeOk.handle(event,{openProgrammeDetails()},{requestSelectedReminder()})
         if(event.action==AndroidKey.ACTION_DOWN){
+            programmeOk.cancel()
             val visible=filtered();val index=visible.indexOfFirst{it.id==selectedChannel}.coerceAtLeast(0)
             when(event.keyCode){
                 AndroidKey.KEYCODE_DPAD_UP -> visible.getOrNull((index-1).coerceAtLeast(0))?.let{selectedChannel=it.id}
@@ -1110,7 +1150,7 @@ class MainActivity : ComponentActivity() {
     private fun panelTitle(page:String)=when(page){
         "updates"->tr("update_title")
         "epgOrder"->tr("guide_priority");"epgOffset"->tr("epg_time_offset");"playlistEpg"->tr("programme_guide_source");"phone"->tr("url_from_phone");"settings"->tr("settings");"playlists"->tr("playlists");"source"->if(editingPlaylist==null)tr("new_playlist")else tr("edit_playlist");"files"->tr("choose_file")
-        "language"->tr("language");"appearance"->tr("appearance");"playback"->tr("playback");"audio"->tr("audio");"remote"->tr("remote_control")
+        "reminderTimes"->tr("reminder_times");"language"->tr("language");"appearance"->tr("appearance");"playback"->tr("playback");"audio"->tr("audio");"remote"->tr("remote_control")
         "startup"->tr("on_startup");"backup"->tr("backup");"restorePassword"->tr("legacy_backup");"restoreConfirm"->tr("restore_data")
         "more"->tr("more");"search"->tr("search");"epg"->tr("programme_guides")
         "epgEdit"->if(epgSourceId.isEmpty())tr("add_programme_guide")else tr("edit_programme_guide")
@@ -1122,7 +1162,7 @@ class MainActivity : ComponentActivity() {
         "updates"->"update-action"
         "epgOrder"->epgOrder.firstOrNull()?.let{"epg-move:${it.id}"}.orEmpty();"epgOffset"->"offset-reset";"playlistEpg"->"playlist-epg-auto";"phone"->"phone-close";"settings"->"playlists";"playlists"->data.playlists.firstOrNull()?.let{"playlist:${it.id}"}?:"add";"source"->if(candidate!=null)"source-add"else "source-url"
         "files"->"file-close"
-        "language"->"language:${L10n.language}";"appearance"->"font-size";"playback","audio"->"audio-language";"startup"->"resume";"backup"->if(loadFailed)"restore"else "export"
+        "reminderTimes"->"reminder-minute:5";"language"->"language:${L10n.language}";"appearance"->"font-size";"playback","audio"->"audio-language";"startup"->"resume";"backup"->if(loadFailed)"restore"else "export"
         "restorePassword"->"legacy-open";"restoreConfirm"->"restore-apply";"more"->"pause";"search"->"search-input"
         "epg"->data.sources.firstOrNull()?.let{"epg-source:${it.id}"}?:"epg-add"
         "epgEdit"->"epg-paste";"epgMenu"->"epg-edit";"epgDelete"->"delete-cancel";"epgInterval"->"interval:${data.epgIntervalHours}"
@@ -1159,6 +1199,26 @@ class MainActivity : ComponentActivity() {
     }
     @Composable private fun AppContent(){
         val rootFocus=remember{FocusRequester()}
+        LaunchedEffect(screen){programmeOk.cancel()}
+        LaunchedEffect(loaded){
+            if(!loaded)return@LaunchedEffect
+            reminders=reminderStore.read()
+            while(true){
+                reminderNow=System.currentTimeMillis()
+                val valid=reminders.filter{it.end>reminderNow&&data.channels.any{c->c.id==it.channelId}}
+                if(valid!=reminders)saveReminders(valid)
+                if(activeReminder==null&&reminderDialog==null&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)){
+                    reminders.firstOrNull{it.due(reminderNow,data.reminderMinutes)}?.let{due->
+                        saveReminders(reminders.map{if(it.id==due.id)it.delivered(reminderNow,data.reminderMinutes)else it})
+                        reminderSeconds=15;reminderInteracted=false;activeReminder=due
+                    }
+                }
+                delay(1000)
+            }
+        }
+        LaunchedEffect(activeReminder?.id,reminderInteracted){
+            if(activeReminder!=null&&!reminderInteracted){repeat(15){delay(1000);reminderSeconds=14-it};activeReminder=null}
+        }
         LaunchedEffect(loaded){
             while(loaded&&!loadFailed){
                 if(!epgUpdating&&!busy)try{
@@ -1229,29 +1289,43 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(exitHintRevision){if(exitHint){delay(ExitConfirmation.WINDOW_MS);exitHint=false;exitConfirmation.reset()}}
             LaunchedEffect(busy){busySeconds=0;while(busy){delay(1000);busySeconds++}}
             LaunchedEffect(screen,controls,playback,interaction,seekDraft,pendingProgramme,archiveEnded,diagnosticsOpen){if(screen=="player"&&controls&&playback=="playing"&&seekDraft==null&&pendingProgramme==null&&!archiveEnded){delay(3000);controls=false}}
-            LaunchedEffect(message){if(message.isNotEmpty()&&screen in listOf("guide","player","details","browse")){delay(4500);message=""}}
+            LaunchedEffect(message){if(message.isNotEmpty()&&screen in listOf("guide","player","details","browse","search")){delay(4500);message=""}}
             Box(Modifier.fillMaxSize().semantics{testTagsAsResourceId=true}.clipToBounds().background(T.bg).onPreviewKeyEvent{handleRemote(it.nativeKeyEvent)}.focusRequester(rootFocus).focusable()){
                 if(!loaded)Text(tr(if(optimizingGuide)"optimizing_programme_storage" else "opening_tv_wave"),Modifier.align(Alignment.Center).padding(T.safe).widthIn(max=640.dp),color=T.text,fontSize=T.title,textAlign=androidx.compose.ui.text.style.TextAlign.Center)
                 else {
-                    val base=when(screen){"browse"->"player";"details"->"details";"guide","player"->screen;else->backgroundScreen}
-                    val overlay=screen !in listOf("guide","player","browse","details")
+                    val base=when(screen){"browse"->"player";"details"->"details";"guide","player","reminders"->screen;else->backgroundScreen}
+                    val overlay=screen !in listOf("guide","player","browse","details","reminders")
                     val leftDepth=when{screen=="search"->0;screen=="main"->2;screen=="groups"->1;!overlay->0;panelStack.any{it in listOf("main","search")}->2;"groups" in panelStack->1;else->0}
                     val expandedMainWidth=T.leftMainWidth*maxOf(1f,LocalDensity.current.fontScale)
                     val mainWidth=when(leftDepth){2->expandedMainWidth;1->T.leftRailWidth;else->0.dp}
                     var lastMenuExpanded by remember{mutableStateOf(false)}
                     val menuExpanded=if(leftDepth>0)leftDepth==2 else lastMenuExpanded
                     SideEffect{if(leftDepth>0)lastMenuExpanded=leftDepth==2}
-                    val guideShift by animateDpAsState(if(leftDepth>0)mainWidth+T.leftGroupWidth*maxOf(1f,LocalDensity.current.fontScale)else 0.dp,tween(T.menuMotionMs),label="guide-shift")
+                    var previousScreen by remember{mutableStateOf(screen)}
+                    val reminderTransition=screen=="reminders"||previousScreen=="reminders"
+                    SideEffect{previousScreen=screen}
+                    val targetGuideShift=if(leftDepth>0)mainWidth+T.leftGroupWidth*maxOf(1f,LocalDensity.current.fontScale)else 0.dp
+                    val animatedGuideShift by animateDpAsState(targetGuideShift,tween(if(reminderTransition)0 else T.menuMotionMs),label="guide-shift")
+                    val guideShift=if(reminderTransition)targetGuideShift else animatedGuideShift
                     val groupShift by animateDpAsState(mainWidth,tween(T.menuMotionMs),label="group-shift")
                     BoxWithConstraints(Modifier.fillMaxSize().offset(x=guideShift).then(if(overlay)Modifier.clearAndSetSemantics{}else Modifier)){
                         val full=base=="player"
-                        val motion=tween<androidx.compose.ui.unit.Dp>(T.videoMotionMs,easing=FastOutSlowInEasing)
-                        val x by animateDpAsState(if(full)0.dp else T.safe,motion,label="video-x")
-                        val y by animateDpAsState(if(full)0.dp else T.previewTop,motion,label="video-y")
-                        val width by animateDpAsState(if(full)maxWidth else guidePreviewWidth(maxWidth-T.safe*2),motion,label="video-width")
-                        val height by animateDpAsState(if(full)maxHeight else T.previewHeight,motion,label="video-height")
+                        val reminderRect=reminderPreviewRect(maxWidth,LocalDensity.current.fontScale,reminders.isNotEmpty())
+                        val motion=tween<androidx.compose.ui.unit.Dp>(if(reminderTransition)0 else T.videoMotionMs,easing=FastOutSlowInEasing)
+                        val targetX=if(full)0.dp else if(base=="reminders")reminderRect.left else T.safe
+                        val targetY=if(full)0.dp else if(base=="reminders")reminderRect.top else T.previewTop
+                        val targetWidth=if(full)maxWidth else if(base=="reminders")reminderRect.right-reminderRect.left else guidePreviewWidth(maxWidth-T.safe*2)
+                        val targetHeight=if(full)maxHeight else if(base=="reminders")reminderRect.bottom-reminderRect.top else T.previewHeight
+                        val animatedX by animateDpAsState(targetX,motion,label="video-x")
+                        val animatedY by animateDpAsState(targetY,motion,label="video-y")
+                        val animatedWidth by animateDpAsState(targetWidth,motion,label="video-width")
+                        val animatedHeight by animateDpAsState(targetHeight,motion,label="video-height")
+                        val x=if(reminderTransition)targetX else animatedX
+                        val y=if(reminderTransition)targetY else animatedY
+                        val width=if(reminderTransition)targetWidth else animatedWidth
+                        val height=if(reminderTransition)targetHeight else animatedHeight
                         val radius by animateDpAsState(if(full)0.dp else T.previewRadius,motion,label="video-radius")
-                        if(base=="details")ProgrammeDetails()else if(!full)Guide(active=!overlay)
+                        if(base=="details")ProgrammeDetails()else if(base=="reminders")RemindersPage()else if(!full)Guide(active=!overlay)
                         // One PlayerView and one video surface survive preview/fullscreen transitions.
                         if(playing!=null)Box(Modifier.offset(x=x,y=y).size(width,height).clip(RoundedCornerShape(radius))){
                             Video(Modifier.fillMaxSize())
@@ -1259,10 +1333,11 @@ class MainActivity : ComponentActivity() {
                         }
                         if(screen=="browse")ChannelBrowser()else if(full)PlayerScreen(active=!overlay)
                     }
-                    AnimatedVisibility(visible=leftDepth>0,enter=slideInHorizontally(tween(T.menuMotionMs)){-it},exit=slideOutHorizontally(tween(T.menuMotionMs)){-it}){
+                    if(screen !in listOf("reminders","search")){
+                    AnimatedVisibility(visible=leftDepth>0,enter=slideInHorizontally(tween(T.menuMotionMs)){-it},exit=slideOutHorizontally(tween(if(reminderTransition)0 else T.menuMotionMs)){-it}){
                         CompositionLocalProvider(LocalPanelPage provides "groups"){Box(Modifier.fillMaxHeight().offset(x=groupShift).width((T.leftGroupWidth*maxOf(1f,LocalDensity.current.fontScale)))){GroupsDrawer()}}
                     }
-                    AnimatedVisibility(visible=leftDepth>0,enter=slideInHorizontally(tween(T.menuMotionMs)){-it},exit=slideOutHorizontally(tween(T.menuMotionMs)){-it}){
+                    AnimatedVisibility(visible=leftDepth>0,enter=slideInHorizontally(tween(T.menuMotionMs)){-it},exit=slideOutHorizontally(tween(if(reminderTransition)0 else T.menuMotionMs)){-it}){
                         val page=if(screen=="search")"search"else"main"
                         CompositionLocalProvider(LocalPanelPage provides page){Box(Modifier.fillMaxHeight().width(groupShift).clipToBounds()){
                             // Animate only the clipped viewport. Text is always measured at its
@@ -1273,6 +1348,7 @@ class MainActivity : ComponentActivity() {
                                 else MenuRail(if(screen=="settings"||"settings" in panelStack)"settings"else if(group==BuiltinGroups.FAVOURITES)"favourites"else"tv"){key->panelFocus["main"]=key;showMainMenu()}
                             }
                         }}
+                    }
                     }
                     val right=overlay&&screen !in listOf("groups","main","search")
                     var lastPanel by remember{mutableStateOf("settings")}
@@ -1285,6 +1361,20 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                     if(screen=="search")UnifiedSearch()
+                    reminderDialog?.let{r->
+                        val exists=reminders.any{it.id==r.id}
+                        ReminderConfirm(r,exists,onConfirm={
+                            if(exists)saveReminders(reminders.filterNot{it.id==r.id})
+                            else if(r.start>System.currentTimeMillis())saveReminders(reminders+r)
+                            reminderDialog=null
+                        },onDismiss={reminderDialog=null})
+                    }
+                    activeReminder?.let{r->
+                        ReminderNotification(r,reminderSeconds,reminderInteracted,onInteraction={reminderInteracted=true},onWatch={
+                            activeReminder=null
+                            data.channels.firstOrNull{it.id==r.channelId}?.let{c->panelStack.clear();screen="player";tune(c,false);controls=true;interaction++}
+                        },onClose={activeReminder=null})
+                    }
                     if(!overlay&&(archiveLoading||archiveSession!=null&&playback=="buffering")) {
                         if(screen=="player") {
                             Box(Modifier.align(Alignment.Center).testTag("archive-loading")) {
@@ -1303,7 +1393,7 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     }
-                    if(exitHint || !overlay&&message.isNotEmpty()) {
+                    if(exitHint || (!overlay||screen=="search")&&message.isNotEmpty()) {
                         Text(if(exitHint)tr("press_back_twice_to_exit")else message,Modifier.align(Alignment.BottomCenter).padding(bottom=T.footerSpace).background(T.raised,RoundedCornerShape(T.radius)).padding(T.gap),color=T.text,fontSize=T.caption)
                     }
                 }
@@ -1340,13 +1430,13 @@ class MainActivity : ComponentActivity() {
                 page=="source"&&candidate!=null->defaultFocus(page)
                 else->panelFocus[page]?:defaultFocus(page)
             }
-            if(key==wanted&&interactive){
+            if(key==wanted&&interactive&&page !in listOf("reminders","search")){
                 // Lazy items and animated panels may be placed a frame later.
                 repeat(5){delay(60);if(runCatching{requester.requestFocus()}.getOrDefault(false))return@LaunchedEffect}
             }
         }
         val fg=if(focused&&checked==null)T.onAccent else if(enabled)T.text else T.muted
-        val contentSizedMenuRow=row&&page in listOf("groups","main","search")
+        val contentSizedMenuRow=row&&page in listOf("groups","main","search","reminders")
         Row(modifier.testTag(key).focusRequester(requester).onFocusChanged{focused=it.isFocused;if(it.isFocused)panelFocus[page]=key}
             .then(if(checked!=null)Modifier.background(T.surface,RoundedCornerShape(T.radius))
                 .border(T.focusLine,if(focused)T.accent else Color.Transparent,RoundedCornerShape(T.radius))
@@ -1359,7 +1449,8 @@ class MainActivity : ComponentActivity() {
             .then(if(contentSizedMenuRow)Modifier else Modifier.heightIn(min=if(row)T.settingRow*maxOf(1f,LocalDensity.current.fontScale)else T.actionHeight))
             .padding(horizontal=if(row)T.gap else T.actionPad,vertical=T.small),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(T.small)){
             if(icon!=null)MenuIcon(icon,fg,Modifier.size(T.menuIcon*if(contentSizedMenuRow)minOf(1f,LocalDensity.current.fontScale)else 1f))
-            Column(if(row)Modifier.weight(1f)else Modifier){Text(label,color=fg,fontSize=T.body,fontWeight=FontWeight.Normal,lineHeight=(T.body)*1.3f,maxLines=2,overflow=TextOverflow.Ellipsis)
+            Column(if(row)Modifier.weight(1f)else Modifier){Text(label,color=fg,fontSize=if(key=="main-reminders")T.body*.9f else T.body,fontWeight=FontWeight.Normal,lineHeight=(T.body)*1.3f,maxLines=2,overflow=TextOverflow.Ellipsis,
+                style=if(key.startsWith("group:"))groupLabelStyle(LocalTextStyle.current,label,L10n.language)else if(key.startsWith("main-"))menuLabelStyle()else LocalTextStyle.current)
                 if(subtitle.isNotEmpty())Text(subtitle,color=if(focused)T.onAccent else T.muted,fontSize=T.micro,maxLines=2,overflow=TextOverflow.Ellipsis)}
             if(checked!=null){
                 val position by animateFloatAsState(if(checked)1f else 0f,animationSpec=tween(150),label="switch-thumb")
@@ -1376,8 +1467,8 @@ class MainActivity : ComponentActivity() {
     @Composable private fun ToggleSetting(label:String,key:String,checked:Boolean,modifier:Modifier=Modifier,onClick:()->Unit){
         Action(label,modifier.fillMaxWidth(),key,enabled=!busy,row=true,checked=checked,onClick=onClick)
     }
-    @Composable private fun Setting(label:String,key:String,value:String="›",subtitle:String="",modifier:Modifier=Modifier,onClick:()->Unit){Action(label,modifier.fillMaxWidth(),key,enabled=!busy,row=true,value=value,subtitle=subtitle,icon=key.removePrefix("main-").takeIf{key in listOf("main-search","main-tv","main-favourites","main-settings")},onClick=onClick)}
-    @Composable private fun Field(label:String,value:String,secret:Boolean=false,autoFocus:Boolean=false,onSubmit:(()->Unit)?=null,onFocus:(Boolean)->Unit={},modifier:Modifier=Modifier,onChange:(String)->Unit){
+    @Composable private fun Setting(label:String,key:String,value:String="›",subtitle:String="",modifier:Modifier=Modifier,onClick:()->Unit){Action(label,modifier.fillMaxWidth(),key,enabled=!busy,row=true,value=value,subtitle=subtitle,icon=key.removePrefix("main-").takeIf{key in listOf("main-search","main-tv","main-favourites","main-reminders","main-settings")},onClick=onClick)}
+    @Composable private fun Field(label:String,value:String,secret:Boolean=false,autoFocus:Boolean=false,onSubmit:(()->Unit)?=null,onFocus:(Boolean)->Unit={},modifier:Modifier=Modifier,textStyle:androidx.compose.ui.text.TextStyle?=null,onChange:(String)->Unit){
         val focus=LocalFocusManager.current;val keyboard=LocalSoftwareKeyboardController.current
         var focused by remember{mutableStateOf(false)}
         var editing by remember{mutableStateOf(autoFocus)}
@@ -1390,7 +1481,7 @@ class MainActivity : ComponentActivity() {
             Text(label,color=T.text,fontSize=T.caption,lineHeight=T.caption*1.3f)
             BasicTextField(value=value,onValueChange=onChange,singleLine=true,readOnly=!editing,enabled=!busy,keyboardOptions=KeyboardOptions(showKeyboardOnFocus=autoFocus,imeAction=if(autoFocus)ImeAction.Search else ImeAction.Done),
                 keyboardActions=KeyboardActions(onSearch={keyboard?.hide();onSubmit?.invoke()},onDone={keyboard?.hide();onSubmit?.invoke()}),
-                textStyle=androidx.compose.ui.text.TextStyle(fontSize=T.description,lineHeight=T.description*1.3f,color=fg),cursorBrush=SolidColor(fg),
+                textStyle=textStyle?.copy(color=fg)?:androidx.compose.ui.text.TextStyle(fontSize=T.description,lineHeight=T.description*1.3f,color=fg),cursorBrush=SolidColor(fg),
                 modifier=modifier.fillMaxWidth().focusRequester(requester).onFocusChanged{if(focused&&!it.isFocused)editing=false;focused=it.isFocused;onFocus(it.isFocused)}.onPreviewKeyEvent{e->val event=e.nativeKeyEvent
                     when{
                         event.keyCode in listOf(AndroidKey.KEYCODE_DPAD_CENTER,AndroidKey.KEYCODE_ENTER)&&event.action==AndroidKey.ACTION_DOWN&&!editing->{consumeOkUp=true;editing=true;true}
@@ -1503,7 +1594,34 @@ class MainActivity : ComponentActivity() {
             LazyColumn(state=state,modifier=Modifier.weight(1f).padding(T.focusGap),verticalArrangement=Arrangement.spacedBy(T.tiny)){
                 items(groups){g->Setting(BuiltinGroups.label(g),"group:${g}",if(group==g)"●"else""){selectGroup(g)}}
             }
-            Caption(tr("main_menu_channels"))
+        }
+    }
+    @Composable private fun RemindersPage(){
+        val navFocus=remember{FocusRequester()}
+        val listFocus=remember{FocusRequester()}
+        val menuWidth=T.leftMainWidth*maxOf(1f,LocalDensity.current.fontScale)
+        LaunchedEffect(reminderNavRevision){if(reminderNavRevision>0)navFocus.requestFocus()}
+        Box(Modifier.fillMaxSize().background(T.bg).testTag("reminders-page")){
+            Box(Modifier.width(menuWidth).fillMaxHeight().onFocusChanged{reminderSidebarFocused=it.hasFocus}
+                .focusProperties{if(reminders.isNotEmpty())right=listFocus}.focusGroup()){
+                MainMenu(navFocus)
+            }
+            Box(Modifier.padding(start=menuWidth).fillMaxSize()){
+                ReminderBrowser(reminders,reminderNow,listFocus,navFocus,reminderEntryRevision,
+                    playing=playing!=null,
+                    logo={r,ink->data.channels.firstOrNull{it.id==r.channelId}?.let{ChannelLogo(it,ink,T.inputBorder)}},
+                    description={r->
+                        var description by remember(r.id){mutableStateOf<String?>(null)}
+                        LaunchedEffect(r.id,epgRevision,data.epgOffsets){
+                            description=null
+                            val offset=data.epgOffsets[r.channelId]?:0
+                            val p=withContext(Dispatchers.IO){repository.schedule(r.channelId,r.start,r.start+1,1,offset).firstOrNull()}
+                            description=p?.takeIf{it.start==r.start&&it.title==r.title}?.description.orEmpty()
+                        }
+                        description
+                    },onDelete={r->saveReminders(reminders.filterNot{it.id==r.id})},
+                    registerBack={reminderBack=it})
+            }
         }
     }
     @Composable private fun UnifiedSearch(){
@@ -1531,10 +1649,12 @@ class MainActivity : ComponentActivity() {
             detail=withContext(Dispatchers.IO){repository.schedule(item.first.id,time,time+1,1,offset).firstOrNull()}
         }
         SearchScreen(guideSearch,searching,failure,detail,
-            brand={BrandHeader()},
-            field={modifier,autoFocus,submit,focus->Field(tr("search_field"),guideSearch.query,autoFocus=autoFocus,onSubmit=submit,onFocus=focus,modifier=modifier){guideSearch.query=it}},
+            navigation={modifier,searchFocus,tvFocus,input->
+                Box(modifier.focusGroup()) { MainMenu(searchFocus=searchFocus,tvFocus=tvFocus,searchField=input) }
+            },registerBack={searchBack=it},
+            field={modifier,autoFocus,submit,focus->Field(tr("search_field"),guideSearch.query,autoFocus=autoFocus,onSubmit=submit,onFocus=focus,modifier=modifier,textStyle=menuLabelStyle()){guideSearch.query=it}},
             logo={channel,color->ChannelLogo(channel,color,T.inputBorder)},archiveAvailable=::programmeHasArchive,span=::programmeSpan,now=nowTime,hasEpg=data.sources.isNotEmpty(),
-            onSelected={channel,p->preview=channel to p},
+            onSelected={channel,p->preview=channel to p},onReminder={channel,p->requestReminder(channel,p)},
             onOpen={channel,p->
                 query="";group=BuiltinGroups.ALL;selectedChannel=channel.id;panelStack.clear();backgroundScreen="guide"
                 if(p==null){screen="guide";guideTime=0L;guideZone=0;tune(channel)}
@@ -1543,21 +1663,21 @@ class MainActivity : ComponentActivity() {
                     epgRows=epgRows+(channel.id to (epgRows[channel.id].orEmpty().filter{it.start!=p.start}+full).sortedBy{it.start})
                     guideTime=p.start;guideZone=1;detailsReturn="search";screen="details";error="";message=""
                 }
-            },onRememberQuery={rememberSearch(it)},onRemoveQuery={guideSearch.recentQueries=searchHistory.remove(it)},
-            onTv={rememberSearch();selectGroup(BuiltinGroups.ALL)},onFavourites={rememberSearch();selectGroup(BuiltinGroups.FAVOURITES)},onSettings={rememberSearch();openPanel("settings")})
+            },onRememberQuery={rememberSearch(it)},onRemoveQuery={guideSearch.recentQueries=searchHistory.remove(it)})
     }
-    @Composable private fun BoxScope.MainMenu(){
+    @Composable private fun BoxScope.MainMenu(reminderFocus:FocusRequester?=null,searchFocus:FocusRequester?=null,tvFocus:FocusRequester?=null,searchField:(@Composable ()->Unit)?=null){
         Column(Modifier.align(Alignment.CenterStart).fillMaxHeight().fillMaxWidth().background(T.surface)
             .padding(start=T.pad,end=T.pad,top=T.drawerTop,bottom=T.drawerBottom),verticalArrangement=Arrangement.spacedBy(T.gap)){
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(T.focusGap),verticalArrangement=Arrangement.spacedBy(T.gap)){
                 BrandHeader()
-                Setting(tr("search"),"main-search"){guideSearch.beginVisit(searchHistory.read());openPanel("search")}
-                Setting(tr("tv"),"main-tv",if(group==BuiltinGroups.ALL)"●"else""){selectGroup(BuiltinGroups.ALL)}
-                Setting(BuiltinGroups.label(BuiltinGroups.FAVOURITES),"main-favourites",if(group==BuiltinGroups.FAVOURITES)"●"else""){selectGroup(BuiltinGroups.FAVOURITES)}
+                searchField?.invoke()
+                Setting(tr("search"),"main-search",modifier=if(searchFocus!=null)Modifier.focusRequester(searchFocus)else Modifier){guideSearch.beginVisit(searchHistory.read());openPanel("search")}
+                Setting(tr("tv"),"main-tv",modifier=if(tvFocus!=null)Modifier.focusRequester(tvFocus)else Modifier){selectGroup(BuiltinGroups.ALL)}
+                Setting(BuiltinGroups.label(BuiltinGroups.FAVOURITES),"main-favourites"){selectGroup(BuiltinGroups.FAVOURITES)}
+                Setting(tr("reminders"),"main-reminders",modifier=if(reminderFocus!=null)Modifier.focusRequester(reminderFocus)else Modifier){showReminders()}
             }
             HorizontalDivider(color=T.border)
             Setting(tr("settings"),"main-settings"){openPanel("settings")}
-            Caption(tr("channel_groups"))
         }
     }
     @Composable private fun BoxScope.Drawer(){
@@ -1594,6 +1714,7 @@ class MainActivity : ComponentActivity() {
                         "playlistMenu"->PlaylistMenu()
                         "playlistDelete"->{Caption(tr("this_playlist_and_its_channels_will_be_removed_from_the_app"));Action(tr("cancel_m245"),key="delete-cancel"){back()};Action(tr("delete"),key="playlist-delete-confirm",enabled=!busy){deletePlaylist()}}
                         "appearance"->AppearanceScreen()
+                        "reminderTimes"->reminderMinuteOptions.forEach{minutes->ToggleSetting(tr(if(minutes==60)"reminder_one_hour"else"reminder_minutes_before",minutes),"reminder-minute:$minutes",minutes in data.reminderMinutes){persist{it.copy(reminderMinutes=if(minutes in it.reminderMinutes)it.reminderMinutes-minutes else it.reminderMinutes+minutes)}}}
                         "language"->LanguageOptions()
                         "playback","audio"->AudioScreen()
                         "startup"->{Caption(tr("the_tv_guide_opens_on_startup_you_can_also_play_the_last_channel_in_th"));ToggleSetting(tr("last_channel"),"resume",data.resume){persist{it.copy(resume=!it.resume)}}}
@@ -1603,7 +1724,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-            Caption(if(panelStack.isEmpty())tr("back_close")else tr("back_previous_screen"))
         }
     }
     @Composable private fun AppearanceScreen(){
@@ -1641,6 +1761,7 @@ class MainActivity : ComponentActivity() {
                     true
                 }else false
             }){openPanel("language")}
+        Setting(tr("reminder_times"),"appearance-reminders",""){openPanel("reminderTimes")}
     }
     @Composable private fun LanguageOptions(firstLaunch:Boolean=false){
         val first=remember{FocusRequester()}
@@ -1856,7 +1977,7 @@ class MainActivity : ComponentActivity() {
                 when(key.keyCode){
                     AndroidKey.KEYCODE_DPAD_LEFT,AndroidKey.KEYCODE_DPAD_RIGHT->{if(key.action==AndroidKey.ACTION_DOWN)moveProgramme(if(key.keyCode==AndroidKey.KEYCODE_DPAD_RIGHT)1 else -1);true}
                     AndroidKey.KEYCODE_DPAD_UP,AndroidKey.KEYCODE_DPAD_DOWN->{if(key.action==AndroidKey.ACTION_DOWN)scope.launch{info.animateScrollBy(with(density){T.descriptionScroll.toPx()}*if(key.keyCode==AndroidKey.KEYCODE_DPAD_DOWN)1 else -1)};true}
-                    AndroidKey.KEYCODE_DPAD_CENTER,AndroidKey.KEYCODE_ENTER->{if(key.action==AndroidKey.ACTION_DOWN&&key.repeatCount==0)requestProgrammePlayback();true}
+                    AndroidKey.KEYCODE_DPAD_CENTER,AndroidKey.KEYCODE_ENTER->programmeOk.handle(key,{requestProgrammePlayback()},{requestSelectedReminder()})
                     else->false
                 }
             }.focusable()){
