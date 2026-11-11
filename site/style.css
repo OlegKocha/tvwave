@@ -31,8 +31,8 @@ html{scroll-padding-top:82px}.section,.gallery,.hero{scroll-margin-top:16px}.gal
  .side-footer{margin-top:24px}
  .menu-backdrop:not([hidden]){display:block;position:fixed;inset:60px 0 0;border:0;background:#0009;z-index:35}
  .main{padding-inline:max(18px,env(safe-area-inset-left)) max(18px,env(safe-area-inset-right))}
- .tabs{flex-wrap:nowrap;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:thin;padding:3px 3px 8px}
- .tabs button{flex:0 0 auto;min-height:44px;font-size:12px;padding:10px 13px}
+ .tabs{flex-wrap:wrap;gap:4px;padding:3px 3px 8px}
+ .tabs button{flex:0 1 auto;max-width:100%;white-space:normal;min-height:44px;font-size:12px;padding:10px 13px}
  .gallery-arrow{width:44px;height:44px}
  .button{min-height:44px}
  .gallery-caption{display:none}
