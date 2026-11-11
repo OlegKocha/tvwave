@@ -24,7 +24,7 @@ html{scroll-padding-top:82px}.section,.gallery,.hero{scroll-margin-top:16px}.gal
  .mobile-menu span{margin-left:6px;font-size:20px}
  .top-actions{gap:10px}
  .top-actions>a{display:flex;align-items:center;min-height:44px}
- .languages button{min-width:38px;min-height:38px}
+ .languages button{min-width:44px;min-height:44px}
  .sidebar{width:min(300px,calc(100vw - 48px));bottom:0;padding-bottom:max(20px,env(safe-area-inset-bottom));overscroll-behavior:contain}
  .sidebar .nav-link{min-height:44px}
  .sidebar .search-nav input{font-size:16px}
@@ -54,4 +54,15 @@ html{scroll-padding-top:82px}.section,.gallery,.hero{scroll-margin-top:16px}.gal
  .top-actions>a{display:none}
  .hero h1{font-size:34px}
  .remote-lines>div{grid-template-columns:65px 1fr}
+}
+/* Keep controls comfortable to tap in landscape as well as portrait. */
+@media(max-width:950px){
+ .languages button{min-width:44px;min-height:44px}
+ .tabs button,.button,.nav-link{min-height:44px}
+ .gallery-arrow,dialog button{min-width:44px;min-height:44px}
+ dialog header{gap:12px}
+ #close-dialog{flex-shrink:0;white-space:nowrap}
+ #faq details{padding:0}
+ #faq summary{min-height:44px;padding:20px 0}
+ #faq details p{margin-top:0;padding-bottom:20px}
 }
