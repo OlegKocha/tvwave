@@ -1,0 +1,23 @@
+appId: tv.tvwave.app.debug
+---
+- runFlow: ../open-epg.yaml
+- repeat:
+    while:
+      notVisible:
+        id: epg-update
+        focused: true
+    times: 10
+    commands:
+      - pressKey: Remote Dpad Down
+- assertVisible:
+    id: epg-update
+    focused: true
+- pressKey: Remote Dpad Center
+- extendedWaitUntil:
+    visible: ".*100%.*"
+    timeout: 30000
+- assertVisible:
+    id: epg-update
+- assertNotVisible:
+    id: epg-cancel
+- takeScreenshot: epg-all-completed

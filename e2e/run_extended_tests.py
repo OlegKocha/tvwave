@@ -35,6 +35,10 @@ for flow in ['playlists','settings','epg-mapping','channels','files','restore']:
   assert not any(k in config for k in ['epgBackup','programmes','epgCache']) and len(content)<10000
   (out/'backup-check.json').write_text(json.dumps({'bytes':len(content),'fontPercent':60,'playlists':1,'epgSources':1,'programmeCache':False,'checksumValid':True},indent=2))
   shell('uninstall','tv.tvwave.app.debug');shell('install',str(project/'app/build/outputs/apk/debug/app-debug.apk'))
+  # Keep instrumentation signed with the APK just installed. A stale test APK
+  # can otherwise break every subsequent group after this reinstall scenario.
+  subprocess.run(adb+['uninstall','tv.tvwave.app.debug.test'],capture_output=True)
+  shell('install',str(project/'app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk'))
   shell('shell','appops','set','tv.tvwave.app.debug','MANAGE_EXTERNAL_STORAGE','allow')
   shell('push',str(backup),'/sdcard/Download/qa-export.tvwavebackup')
  ok=run('extended/'+flow+'.yaml',flow)

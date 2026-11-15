@@ -63,7 +63,7 @@ class PerformanceStorageTest {
             db.execSQL("DROP TABLE viewing_state");db.execSQL("DROP TABLE guide_summary");db.version=6
         }
         Repository(ctx).use{repo->
-            assertEquals(old,repo.load());assertEquals(8,repo.readableDatabase.version)
+            assertEquals(old,repo.load());assertEquals(10,repo.readableDatabase.version)
             assertTrue(EpgCache.status(repo.readableDatabase,old.sources[0]).programmes>0)
             val next=old.copy(last=old.channels[4].id,history=listOf(old.channels[4].id)+old.history)
             repo.saveViewing(next.last,next.history.distinct())

@@ -19,7 +19,7 @@ import java.util.UUID
 
 /** Synthetic state only. Never seed or clear a release installation or physical TV. */
 object TvFixture {
-    fun seed(count:Int=1,large:Boolean=false,font:Int=if(large)120 else 100,rich:Boolean=false,media:String="http://10.0.2.2:8765/video.mp4",todayOnly:Boolean=false) {
+    fun seed(count:Int=1,large:Boolean=false,font:Int=if(large)120 else 100,rich:Boolean=false,media:String="http://10.0.2.2:8765/video.mp4",todayOnly:Boolean=false,timeshift:Boolean=true) {
         val ctx=InstrumentationRegistry.getInstrumentation().targetContext
         check(ctx.packageName=="tv.tvwave.app.debug")
         check(android.os.Build.FINGERPRINT.contains("generic") || android.os.Build.MODEL.contains("sdk")) { "Emulator only" }
@@ -32,7 +32,7 @@ object TvFixture {
         val dayStart=java.util.Calendar.getInstance().apply{set(java.util.Calendar.HOUR_OF_DAY,0);set(java.util.Calendar.MINUTE,0);set(java.util.Calendar.SECOND,0);set(java.util.Calendar.MILLISECOND,0)}.timeInMillis
         val query=if(todayOnly)"?dayStart=$dayStart"else ""
         val sources=(1..count).map{n->legacyEpgSource("http://10.0.2.2:8765/epg/$n.xml$query").copy(name="EPG ${n.toString().padStart(2,'0')}")}
-        val state=AppState(uiLanguage="ru",playlists=listOf(p),large=large,fontPercent=font,history=p.channels.take(6).map{it.id},epgSources=sources)
+        val state=AppState(uiLanguage="ru",playlists=listOf(p),large=large,fontPercent=font,history=p.channels.take(6).map{it.id},epgSources=sources,timeshiftEnabled=timeshift)
         val now=System.currentTimeMillis();val fmt=SimpleDateFormat("yyyyMMddHHmmss Z",Locale.US)
         val xml="<tv>"+(1..16).joinToString(""){"<channel id=\"test$it\"><display-name>Тестовый канал $it</display-name></channel>"}+(1..16).joinToString(""){channel->
             if(!rich)"<programme channel=\"test$channel\" start=\"${fmt.format(Date(now-3600000))}\" stop=\"${fmt.format(Date(now+3600000))}\"><title>Тестовая передача $channel</title></programme>"
@@ -97,7 +97,7 @@ class TvNavigationTest {
     }
     @Test fun seedForMaestro(){
         val args=InstrumentationRegistry.getArguments()
-        TvFixture.seed(args.getString("sources","1").toInt(),args.getString("large","false").toBoolean(),args.getString("font",if(args.getString("large","false")=="true")"120"else"100").toInt(),args.getString("rich","false").toBoolean(),args.getString("media","http://10.0.2.2:8765/video.mp4"))
+        TvFixture.seed(args.getString("sources","1").toInt(),args.getString("large","false").toBoolean(),args.getString("font",if(args.getString("large","false")=="true")"120"else"100").toInt(),args.getString("rich","false").toBoolean(),args.getString("media","http://10.0.2.2:8765/video.mp4"),timeshift=args.getString("timeshift","true").toBoolean())
     }
     @Test fun stageImportForMaestro(){
         check(ctx.packageName=="tv.tvwave.app.debug")

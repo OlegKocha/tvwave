@@ -13,8 +13,8 @@ object CacheMaintenance {
     fun lastSuccess(db:SQLiteDatabase):Long = db.rawQuery("SELECT last_success FROM cache_maintenance WHERE id=1",null).use {
         if(it.moveToFirst())it.getLong(0)else 0L
     }
-    fun clean(db:SQLiteDatabase,state:AppState,now:Long):Boolean {
-        if(!EpgRetention.due(lastSuccess(db),now))return false
+    fun clean(db:SQLiteDatabase,state:AppState,now:Long,force:Boolean=false):Boolean {
+        if(!force&&!EpgRetention.due(lastSuccess(db),now))return false
         db.beginTransaction()
         try {
             val stored=db.rawQuery("SELECT source FROM guide_meta UNION SELECT source FROM guide_catalog UNION SELECT source FROM guide_programme UNION SELECT source FROM guide_link",null).use { c->
@@ -43,7 +43,8 @@ object CacheMaintenance {
         }finally{db.endTransaction()}
         return true
     }
-    /** Only at startup before playback. Otherwise SQLite reuses free pages on import.
+    /** Optional offline compaction, never on the startup or routine update path.
+     * SQLite reuses free pages on import.
      * VACUUM needs up to twice the database size in additional free space. */
     fun compactIfUseful(db:SQLiteDatabase,availableBytes:Long=File(db.path).parentFile?.usableSpace?:0):Boolean {
         fun pragma(name:String)=db.rawQuery("PRAGMA $name",null).use{it.moveToFirst();it.getLong(0)}

@@ -15,7 +15,7 @@ with (out/'server.log').open('w') as log:
  try:
   for _ in range(30):
    if server.poll() is not None:raise RuntimeError('Logo server failed')
-   try:urllib.request.urlopen('http://127.0.0.1:8767/stats',timeout=1).close();break
+   try:urllib.request.urlopen('http://127.0.0.1:8777/stats',timeout=1).close();break
    except OSError:time.sleep(.1)
   native('linksMigrationAndBackup');native('boundedLoadingAndCancellation')
   if a.real_providers:native('realProviderSamples')
@@ -26,5 +26,5 @@ with (out/'server.log').open('w') as log:
   cmd+=[str(project/'e2e/maestro/channel-logos.yaml')]
   r=subprocess.run(cmd,capture_output=True,timeout=240);(out/'maestro.log').write_bytes(r.stdout+r.stderr)
   results.append({'case':'maestro-logos','passed':r.returncode==0});(out/'results.json').write_text(json.dumps(results,indent=2));print('Maestro',r.returncode,flush=True)
-  (out/'http-stats.json').write_bytes(urllib.request.urlopen('http://127.0.0.1:8767/stats').read());assert r.returncode==0
+  (out/'http-stats.json').write_bytes(urllib.request.urlopen('http://127.0.0.1:8777/stats').read());assert r.returncode==0
  finally:server.terminate();server.wait(timeout=5)

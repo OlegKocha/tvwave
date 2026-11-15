@@ -1,0 +1,70 @@
+appId: tv.tvwave.app.debug
+---
+- launchApp:
+    permissions:
+      all: deny
+- assertVisible:
+    id: guide-brand
+- pressKey: Remote Dpad Down
+- pressKey: back
+- assertVisible:
+    id: "group:Все каналы"
+    focused: true
+- pressKey: back
+- assertVisible:
+    id: main-tv
+    focused: true
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: main-settings
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: playlists
+    focused: true
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Center
+- assertVisible: "Телепрограммы"
+- pressKey: back
+- repeat:
+    times: 5
+    commands:
+      - pressKey: Remote Dpad Down
+- assertVisible:
+    id: backup
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: export
+    focused: true
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: file-access-dialog
+- assertVisible:
+    id: file-access-settings
+    focused: true
+- pressKey: back
+- assertNotVisible:
+    id: file-access-dialog
+- tapOn:
+    id: export
+- assertVisible:
+    id: file-access-dialog
+- tapOn:
+    id: file-access-settings
+- repeat:
+    while:
+      notVisible: "Not allowed"
+    commands:
+      - pressKey: Remote Dpad Down
+- takeScreenshot: android-permission
+- tapOn: "Not allowed"
+- pressKey: back
+- extendedWaitUntil:
+    visible: ".*Копия проверена и сохранена.*"
+    timeout: 15000
+- assertNotVisible:
+    id: file-access-dialog
+- takeScreenshot: backup-export-granted

@@ -2,6 +2,10 @@
   "locale": "ru",
   "nativeName": "Русский",
   "strings": {
+    "file_access_title": "Доступ к файлам",
+    "file_access_explanation": "Чтобы создавать и восстанавливать резервные копии и выбирать плейлисты, разрешите TV Wave доступ к файлам. В настройках Android включите доступ и вернитесь в приложение.",
+    "file_access_unavailable": "Не удалось открыть настройки доступа. Разрешите доступ к файлам в настройках Android.",
+
     "catch_up_available": "Доступен архив",
     "watch_from_start_available": "Доступен просмотр с начала",
     "the_backup_password_must_contain_at_least_8_characters": "Пароль копии должен содержать не меньше 8 символов",
@@ -363,6 +367,8 @@
     "no_timing_information": "Нет данных о времени",
     "added": "Добавлено",
     "1_min": "−1 мин",
+    "rewind_5_seconds": "Назад на 5 секунд",
+    "forward_5_seconds": "Вперёд на 5 секунд",
     "1_min_m366": "+1 мин",
     "go_live_m367": "В эфир",
     "storage_integrity_check_failed": "Нарушена целостность хранилища",
@@ -507,6 +513,17 @@
     "search_go_results": "→ К результатам",
     "reminder_times": "Когда напоминать",
     "reminder_one_hour": "За 1 час",
-    "reminder_minutes_before": "За {p1} минут"
+    "reminder_minutes_before": "За {p1} минут",
+    "timeshift": "Timeshift",
+    "timeshift_limit": "Объём буфера",
+    "timeshift_mb": "{p1} МБ",
+    "timeshift_gb": "{p1} ГБ",
+    "timeshift_delayed": "Отложенный эфир",
+    "timeshift_unavailable": "Локальная перемотка недоступна для этого потока. Продолжаем прямой эфир.",
+    "timeshift_expired": "Старые фрагменты удалены. Продолжаем с начала доступной записи.",
+    "playlist_refresh_failed": "Не удалось обновить плейлист. Прежний список каналов сохранён.",
+    "refreshing_playlist": "Обновляем плейлист «%s»…",
+    "some_playlists_not_updated": "Некоторые плейлисты не обновились. Прежние списки каналов сохранены. Откройте плейлист для подробностей.",
+    "cleaning_old_programme_data": "Очищаем устаревшие данные телепрограммы…"
   }
 }

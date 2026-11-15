@@ -1,0 +1,13 @@
+appId: tv.tvwave.app.debug
+---
+- runFlow: open.yaml
+- tapOn: file
+- assertVisible:
+    id: playlist-edit
+- assertVisible:
+    id: playlist-delete
+- assertNotVisible:
+    id: playlist-refresh
+- pressKey: back
+- assertVisible: file
+- takeScreenshot: file-has-no-refresh

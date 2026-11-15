@@ -1,0 +1,7 @@
+appId: tv.tvwave.app.debug
+---
+- runFlow: ../open-epg.yaml
+- pressKey: back
+- pressKey: Remote Dpad Up
+- pressKey: Remote Dpad Center
+- assertVisible: url

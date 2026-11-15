@@ -19,7 +19,7 @@ data class AppState(
     val playlists: List<Playlist> = emptyList(), val favourites: Set<String> = emptySet(),
     val history: List<String> = emptyList(), val last: String = "", val large: Boolean = false,
     val resume: Boolean = false, val audioLanguage: String = "ru", val subtitles: Boolean = false, val epgUrl:String="", val epgAutoUpdate:Boolean=true, val epgBackup:String="", val epgSources:List<EpgSource> = emptyList(), val epgBindings:Map<String,EpgBinding> = emptyMap(), val epgIntervalHours:Int=24, val fontPercent:Int=if(large)120 else 100,
-    val playlistEpgSources:Map<String,String> = emptyMap(), val epgOffsets:Map<String,Int> = emptyMap(), val uiLanguage:String="", val reminderMinutes:Set<Int> = setOf(5)
+    val playlistEpgSources:Map<String,String> = emptyMap(), val epgOffsets:Map<String,Int> = emptyMap(), val uiLanguage:String="", val reminderMinutes:Set<Int> = setOf(5), val timeshiftEnabled:Boolean=true, val timeshiftMb:Int=1024
 ) {
     val channels get() = playlists.flatMap { it.channels }
     val sources get() = epgSources.ifEmpty{if(epgUrl.isNotEmpty())listOf(legacyEpgSource(epgUrl))else emptyList()}
@@ -102,6 +102,7 @@ object StateCodec {
         root.put("playlists", JSONArray(s.playlists.map { p -> JSONObject().put("id",p.id).put("name",p.name).put("source",p.source).put("raw",p.raw) }))
         root.put("favourites", JSONArray(s.favourites.toList())).put("history", JSONArray(s.history)).put("last",s.last)
         root.put("reminderMinutes",JSONArray(s.reminderMinutes.sorted()))
+        root.put("timeshiftEnabled",s.timeshiftEnabled).put("timeshiftMb",s.timeshiftMb)
         root.put("fontPercent",s.fontPercent).put("uiLanguage",s.uiLanguage)
         root.put("large",s.large).put("resume",s.resume).put("audioLanguage",s.audioLanguage).put("subtitles",s.subtitles)
         root.put("epgSources",JSONArray(s.sources.map{JSONObject().put("id",it.id).put("name",it.name).put("url",it.url)}))
@@ -165,7 +166,7 @@ object StateCodec {
             val interval=j.optInt("epgIntervalHours",24);require(interval in listOf(6,12,24))
             val fontPercent=if(j.has("fontPercent")){require(j.get("fontPercent") is Number);j.getInt("fontPercent").also{require(j.getDouble("fontPercent")==it.toDouble()&&it in 60..130&&it%5==0)}}else if(j.getBoolean("large"))120 else 100
             // Old backups may contain programme caches. Read their configuration only.
-            return AppState(playlists, refs("favourites",50000).toSet(), refs("history",30), last, j.getBoolean("large"),j.getBoolean("resume"),language,j.getBoolean("subtitles"),epgAutoUpdate=j.optBoolean("epgAutoUpdate",true),epgSources=sources,epgBindings=bindings,epgIntervalHours=interval,fontPercent=fontPercent,playlistEpgSources=playlistSources,epgOffsets=offsets,uiLanguage=uiLanguage,reminderMinutes=reminderMinutes)
+            return AppState(playlists, refs("favourites",50000).toSet(), refs("history",30), last, j.getBoolean("large"),j.getBoolean("resume"),language,j.getBoolean("subtitles"),epgAutoUpdate=j.optBoolean("epgAutoUpdate",true),epgSources=sources,epgBindings=bindings,epgIntervalHours=interval,fontPercent=fontPercent,playlistEpgSources=playlistSources,epgOffsets=offsets,uiLanguage=uiLanguage,reminderMinutes=reminderMinutes,timeshiftEnabled=j.optBoolean("timeshiftEnabled",true),timeshiftMb=j.optInt("timeshiftMb",1024).let{if(it in 256..2048&&it%256==0)it else 1024})
         } catch (e: UserError) { throw e } catch (_: Exception) { throw UserError(tr("the_backup_data_is_damaged_or_its_version_is_not_supported")) }
     }
 }

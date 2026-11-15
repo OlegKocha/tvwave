@@ -104,6 +104,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.sync.withLock
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -128,6 +129,43 @@ class MainActivity : ComponentActivity() {
         if(Build.VERSION.SDK_INT < 26 || packageManager.canRequestPackageInstalls()) installAppUpdate()
         else appUpdates.installerMessage("update_permission_denied")
     }
+    private var pendingFileAction by mutableStateOf<(() -> Unit)?>(null)
+    private val fileAccessSettings = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        continueFileAction()
+    }
+    private val legacyFileAccess = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+        continueFileAction()
+    }
+    private fun hasFileAccess() = if(Build.VERSION.SDK_INT >= 30) Environment.isExternalStorageManager()
+        else androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.READ_EXTERNAL_STORAGE) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    private fun withFileAccess(action: () -> Unit) {
+        if(hasFileAccess()) action() else pendingFileAction = action
+    }
+    private fun continueFileAction() {
+        if(!hasFileAccess()) return
+        val action = pendingFileAction
+        pendingFileAction = null
+        action?.invoke()
+    }
+    @Composable private fun FileAccessDialog() {
+        if(pendingFileAction == null) return
+        val first = remember { FocusRequester() }
+        LaunchedEffect(Unit) { first.requestFocus() }
+        AlertDialog(
+            modifier=Modifier.semantics { testTagsAsResourceId=true }.testTag("file-access-dialog"),
+            containerColor=T.surface,
+            onDismissRequest={pendingFileAction=null},
+            title={Text(tr("file_access_title"),color=T.text)},
+            text={Text(tr("file_access_explanation"),color=T.text)},
+            confirmButton={TextButton(modifier=Modifier.testTag("file-access-settings").focusRequester(first),onClick={
+                if(Build.VERSION.SDK_INT >= 30) {
+                    try { fileAccessSettings.launch(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:$packageName"))) }
+                    catch(_:android.content.ActivityNotFoundException) { message=tr("file_access_unavailable") }
+                } else legacyFileAccess.launch(android.Manifest.permission.READ_EXTERNAL_STORAGE)
+            }) { Text(tr("allow_access")) }},
+            dismissButton={TextButton(modifier=Modifier.testTag("file-access-cancel"),onClick={pendingFileAction=null}) { Text(tr("cancel")) }}
+        )
+    }
     private lateinit var repository: Repository
     private lateinit var player: ExoPlayer
     private lateinit var playbackDisplayMode:PlaybackDisplayMode
@@ -136,7 +174,6 @@ class MainActivity : ComponentActivity() {
     private var data by mutableStateOf(AppState())
     private var applying by mutableStateOf(false)
     private var loaded by mutableStateOf(false)
-    private var optimizingGuide by mutableStateOf(false)
     private var loadFailed by mutableStateOf(false)
     private val exitConfirmation=ExitConfirmation()
     private var exitHint by mutableStateOf(false)
@@ -149,6 +186,8 @@ class MainActivity : ComponentActivity() {
     private var epgOrder by mutableStateOf<List<EpgSource>>(emptyList())
     private var movingEpg by mutableStateOf<String?>(null)
     private var epgPlaylistId by mutableStateOf("")
+    private var appliedPlaylistRevision=0L
+    private var playlistFailures by mutableStateOf<Map<String,String>>(emptyMap())
     private var epgFailures by mutableStateOf<Map<String,String>>(emptyMap())
     private var updatingEpgId by mutableStateOf("")
     private var epgStatuses by mutableStateOf<Map<String,EpgStatus>>(emptyMap())
@@ -256,6 +295,38 @@ class MainActivity : ComponentActivity() {
         if(uri==null) { exportBytes?.fill(0);exportBytes=null;message=tr("save_cancelled") }
         else saveExport(uri)
     }
+    private lateinit var timeshift:Timeshift
+    private var timeshiftDelayed by mutableStateOf(false)
+    private var timeshiftTick by mutableLongStateOf(0)
+    private var localPauseTime:Long?=null
+    private val localPlayback get()=timeshift.active && player.currentMediaItem?.localConfiguration?.uri?.scheme=="tvwave-timeshift"
+    private fun localTime():Long {
+        localPauseTime?.let{if(!player.isPlaying)return it}
+        val manifest=player.currentManifest as? androidx.media3.exoplayer.hls.HlsManifest
+        return ((manifest?.mediaPlaylist?.startTimeUs?.div(1000)?:timeshift.window.start)+player.currentPosition).coerceIn(timeshift.window.start,timeshift.window.end)
+    }
+    private fun timelineProgramme()=archiveSession?.programme?:programme(playing?.id,if(localPlayback)localTime()else System.currentTimeMillis())
+    private fun playbackTimelineStart()=timelineProgramme()?.start?:timeshift.window.start
+    private fun seekLocal(time:Long){
+        val w=timeshift.window;if(!localPlayback||!w.ready)return
+        val start=(player.currentManifest as? androidx.media3.exoplayer.hls.HlsManifest)?.mediaPlaylist?.startTimeUs?.div(1000)?:w.start
+        val target=time.coerceIn(w.start,(w.end-1000).coerceAtLeast(w.start))
+        localPauseTime=if(player.isPlaying)null else target
+        timeshiftDelayed=true;player.seekTo((target-start).coerceAtLeast(0));interaction++
+    }
+    private fun startLive(channel:Channel, shouldPlay:Boolean=true){
+        timeshift.stop();timeshiftDelayed=false;localPauseTime=null;timeshiftTick++
+        fun play(uri:android.net.Uri, resume:Boolean=shouldPlay){
+            player.setMediaItem(MediaItem.Builder().setUri(uri).setLiveConfiguration(MediaItem.LiveConfiguration.Builder().setMinPlaybackSpeed(1f).setMaxPlaybackSpeed(1f).build()).build())
+            player.prepare();player.playWhenReady=resume;applyTracks()
+        }
+        player.stop()
+        if(!data.timeshiftEnabled||ArchivePreview.source(this,channel)!=null){play(android.net.Uri.parse(channel.url));return}
+        playback="buffering";updateKeepScreen()
+        timeshift.start(channel.url,data.timeshiftMb,{uri->if(playing?.id==channel.id){timeshiftTick++;play(uri)}},{
+            if(playing?.id==channel.id){val resume=if(player.currentMediaItem?.localConfiguration?.uri?.scheme=="tvwave-timeshift")player.playWhenReady else shouldPlay;timeshiftTick++;timeshiftDelayed=false;localPauseTime=null;message=tr("timeshift_unavailable");play(android.net.Uri.parse(channel.url),resume)}
+        })
+    }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         @Suppress("DEPRECATION")
@@ -268,7 +339,8 @@ class MainActivity : ComponentActivity() {
         // Media requests can remain open while the player consumes its buffer.
         // Keep connection/read timeouts, but no deadline for the entire stream.
         val playbackHttp=http.newBuilder().callTimeout(0,TimeUnit.MILLISECONDS).build()
-        player=ExoPlayer.Builder(this,renderers).setMediaSourceFactory(PlaybackSources(androidx.media3.datasource.DefaultDataSource.Factory(this,OkHttpDataSource.Factory(playbackHttp).setUserAgent("TVWave/${BuildConfig.VERSION_NAME}"))).setLoadErrorHandlingPolicy(object:DefaultLoadErrorHandlingPolicy(0){override fun getRetryDelayMsFor(info:androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo)=C.TIME_UNSET})).build()
+        timeshift=Timeshift(java.io.File(cacheDir,"timeshift"),playbackHttp.newBuilder().readTimeout(12,TimeUnit.SECONDS).build(),lifecycleScope)
+        player=ExoPlayer.Builder(this,renderers).setMediaSourceFactory(PlaybackSources(timeshift.factory(androidx.media3.datasource.DefaultDataSource.Factory(this,OkHttpDataSource.Factory(playbackHttp).setUserAgent("TVWave/${BuildConfig.VERSION_NAME}")))).setLoadErrorHandlingPolicy(object:DefaultLoadErrorHandlingPolicy(0){override fun getRetryDelayMsFor(info:androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo)=C.TIME_UNSET})).build()
         playbackDiagnostics=PlaybackDiagnostics(player,lifecycleScope)
         playbackDisplayMode=PlaybackDisplayMode(this,player)
         player.setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(),true)
@@ -293,11 +365,8 @@ class MainActivity : ComponentActivity() {
         })
         lifecycleScope.launch {
             try { data=withContext(Dispatchers.IO){
-                    val saved=stateLock.withLock{repository.load()}
-                    runCatching{CacheMaintenance.cleanAbandonedFiles(cacheDir,System.currentTimeMillis());stateLock.withLock{if(!EpgUpdateService.state.value.running)repository.maintain(saved,compact=true,onFilter={runOnUiThread{if(saved.uiLanguage.isNotEmpty())L10n.select(saved.uiLanguage);optimizingGuide=true}})}}
-                        .onFailure{android.util.Log.w("TVWave","Cache maintenance deferred",it)}
-                    saved
-                };if(data.uiLanguage.isNotEmpty())L10n.select(data.uiLanguage);selectedChannel=data.last.ifEmpty{data.channels.firstOrNull()?.id.orEmpty()};loaded=true;applyTracks()
+                    stateLock.withLock{repository.load()}
+                };if(data.uiLanguage.isNotEmpty())L10n.select(data.uiLanguage);selectedChannel=data.last.ifEmpty{data.channels.firstOrNull()?.id.orEmpty()};loaded=true;stateLock.withLock{syncRefreshedPlaylists()};applyTracks()
                 if(lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED))EpgUpdateService.resume(this@MainActivity)
                 if(data.resume&&data.uiLanguage.isNotEmpty()) data.channels.find{it.id==data.last}?.let{tune(it,false)}
             } catch(e:Exception){loadFailed=true;loaded=true;error=safeError(e)}
@@ -305,6 +374,10 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             var revision=EpgUpdateService.state.value.revision
             EpgUpdateService.state.collect { update->
+                playlistFailures=update.playlistFailures
+                if(loaded&&appliedPlaylistRevision!=update.playlistRevision){
+                    stateLock.withLock{syncRefreshedPlaylists()}
+                }
                 epgUpdating=update.running;epgStatus=update.status
                 updatingEpgId=update.sourceId;epgFailures=update.failures
                 if(revision!=update.revision){
@@ -313,6 +386,9 @@ class MainActivity : ComponentActivity() {
                     epgRevision++
                 }
             }
+        }
+        lifecycleScope.launch {
+            snapshotFlow{data.timeshiftEnabled}.drop(1).collect{if(archiveSession==null)playing?.let{startLive(it,player.playWhenReady)}}
         }
         setContent { CompositionLocalProvider(LocalContentColor provides T.text) { App() } }
     }
@@ -323,9 +399,11 @@ class MainActivity : ComponentActivity() {
             recoveryStatus="";playbackError="";bufferingJob?.cancel();bufferingJob=null
             if(stableJob==null)stableJob=lifecycleScope.launch{delay(30000);recovery.reset();stableJob=null}
         }else{stableJob?.cancel();stableJob=null}
-        if(playback=="buffering"&&player.playWhenReady&&bufferingJob==null){
-            bufferingJob=lifecycleScope.launch{delay(20000);bufferingJob=null;if(player.playbackState==Player.STATE_BUFFERING&&player.playWhenReady)recoverPlayback(null)}
-        }else if(playback!="buffering"){bufferingJob?.cancel();bufferingJob=null}
+        // Local capture has its own no-progress deadline. Re-preparing every 20s
+        // while a segment is still downloading only resets playback and its cursor.
+        if(playback=="buffering"&&player.playWhenReady&&!localPlayback&&bufferingJob==null){
+            bufferingJob=lifecycleScope.launch{delay(20000);bufferingJob=null;if(player.playbackState==Player.STATE_BUFFERING&&player.playWhenReady&&!localPlayback)recoverPlayback(null)}
+        }else if(playback!="buffering"||localPlayback){bufferingJob?.cancel();bufferingJob=null}
         if(player.playbackState==Player.STATE_ENDED&&archiveSession!=null){archiveEnded=true;controls=true}
         updateKeepScreen()
     }
@@ -338,10 +416,14 @@ class MainActivity : ComponentActivity() {
         if(hasFocus)updateWindowFocusRevision++
     }
     override fun onStart(){super.onStart();playbackDisplayMode.setForeground(true);if(loaded&&!loadFailed)EpgUpdateService.resume(this)}
-    override fun onStop(){ playbackDisplayMode.setForeground(false);cancelArchiveLoad();pausePlayback();exitConfirmation.reset();exitHint=false;super.onStop(); closePhone();cancelRecovery(); player.pause(); window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
-    override fun onDestroy(){ playbackDisplayMode.release();closePhone();cancelRecovery();player.release();logoLoader.close();repository.close();restoreBytes?.fill(0);exportBytes?.fill(0);super.onDestroy() }
+    override fun onStop(){ if(localPlayback){player.stop();localPauseTime=null};timeshift.stop();timeshiftDelayed=false;timeshiftTick++; playbackDisplayMode.setForeground(false);cancelArchiveLoad();pausePlayback();exitConfirmation.reset();exitHint=false;super.onStop(); closePhone();cancelRecovery(); player.pause(); window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
+    override fun onDestroy(){ timeshift.stop();playbackDisplayMode.release();closePhone();cancelRecovery();player.release();logoLoader.close();repository.close();restoreBytes?.fill(0);exportBytes?.fill(0);super.onDestroy() }
     private fun cancelRecovery(){recoveryJob?.cancel();recoveryJob=null;stableJob?.cancel();stableJob=null;bufferingJob?.cancel();bufferingJob=null;recoveryStatus=""}
     private fun recoverPlayback(error:PlaybackException?){
+        if(localPlayback && error?.errorCode==PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW){
+            localPauseTime=null;timeshiftDelayed=false;message=tr("timeshift_expired")
+            player.seekToDefaultPosition();player.prepare();player.play();return
+        }
         if(recoveryJob?.isActive==true)return
         bufferingJob?.cancel();bufferingJob=null;stableJob?.cancel();stableJob=null
         val code=generateSequence<Throwable>(error){it.cause}.filterIsInstance<HttpDataSource.InvalidResponseCodeException>().firstOrNull()?.responseCode
@@ -367,6 +449,7 @@ class MainActivity : ComponentActivity() {
     private fun retryPlayback(){
         cancelRecovery();recovery.reset();playbackError=""
         if(archiveSession?.remote==true){resumePlayback();return}
+        if(archiveSession==null&&!localPlayback){playing?.let{startLive(it)};interaction++;return}
         if(archiveSession==null)player.seekToDefaultPosition();player.prepare();player.play();interaction++
     }
     private fun togglePlayback(){
@@ -412,7 +495,18 @@ class MainActivity : ComponentActivity() {
         error="";message="";busy=true
         ioJob=lifecycleScope.launch { try{action()}catch(e:CancellationException){throw e}catch(e:Exception){error=safeError(e)}finally{busy=false} }
     }
+    // Called under the shared lock, also before writes: a background refresh must
+    // not be overwritten by an Activity holding the previous playlist snapshot.
+    private suspend fun syncRefreshedPlaylists(){
+        val revision=EpgUpdateService.state.value.playlistRevision
+        if(appliedPlaylistRevision==revision)return
+        data=withContext(Dispatchers.IO){repository.load().also{repository.invalidateSchedules()}}
+        appliedPlaylistRevision=revision
+        if(data.channels.none{it.id==selectedChannel})selectedChannel=data.channels.firstOrNull()?.id.orEmpty()
+        epgRevision++
+    }
     private suspend fun change(resetCache:Boolean=false,transform:(AppState)->AppState) { stateLock.withLock {
+        syncRefreshedPlaylists()
         val next=transform(data); applying=true
         try{withContext(NonCancellable){withContext(Dispatchers.IO){repository.save(next,resetCache)};data=next.copy(epgBackup="");if(next.uiLanguage.isNotEmpty()&&next.uiLanguage!=L10n.language)L10n.select(next.uiLanguage)}}finally{applying=false}
     } }
@@ -463,8 +557,9 @@ class MainActivity : ComponentActivity() {
         if(hardware.contains("amlogic")||hardware=="ranchu"||hardware=="goldfish")player.stop()
         playing=channel;selectedChannel=channel.id;videoHeight=0;playbackError="";playback="buffering";controls=true;interaction++
         player.repeatMode=if(ArchivePreview.source(this,channel)!=null)Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
-        player.setMediaItem(MediaItem.fromUri(channel.url));player.prepare();player.play();applyTracks()
+        startLive(channel)
         lifecycleScope.launch { try{stateLock.withLock {
+            syncRefreshedPlaylists()
             if(data.channels.none{it.id==channel.id})return@withLock
             val next=data.copy(last=channel.id,history=(listOf(channel.id)+data.history.filter{it!=channel.id}).take(30))
             withContext(NonCancellable){withContext(Dispatchers.IO){repository.saveViewing(next.last,next.history)};data=next}
@@ -499,15 +594,21 @@ class MainActivity : ComponentActivity() {
         val windowStart=first?.let{IlookArchive.segmentTime(it)}?:a.firstSegmentStartMs
         return a.position(windowStart,player.currentPosition,System.currentTimeMillis())
     }
-    private fun pausePlayback(){if(archiveSession!=null)archivePosition=currentArchivePosition();player.pause()}
+    private fun pausePlayback(){if(localPlayback){localPauseTime=localTime();timeshiftDelayed=true};if(archiveSession!=null)archivePosition=currentArchivePosition();player.pause()}
     private fun resumePlayback(resetRecovery:Boolean=true){
         val a=archiveSession
+        if(a==null&&!localPlayback&&player.currentMediaItem?.localConfiguration?.uri?.scheme=="tvwave-timeshift"){
+            playing?.let{startLive(it)};return
+        }
         if(a?.remote==true)startArchive(a.channel,a.programme,archivePosition,hudFocus,true,resetRecovery)
-        else player.play()
+        else {
+            if(localPlayback){localPauseTime?.let{if(it<timeshift.window.start){seekLocal(timeshift.window.start);message=tr("timeshift_expired")}};localPauseTime=null}
+            player.play()
+        }
     }
     private fun applyArchive(session:ArchiveSession,position:Long,focus:String,playWhenReady:Boolean,resetRecovery:Boolean){
         cancelRecovery();if(resetRecovery)recovery.reset();playbackError="";message="";archiveEnded=false;seekDraft=null;pendingProgramme=null
-        player.stop();archiveSession=session;archivePosition=session.clamp(position,System.currentTimeMillis())
+        timeshift.stop();timeshiftDelayed=false;localPauseTime=null;player.stop();archiveSession=session;archivePosition=session.clamp(position,System.currentTimeMillis())
         archiveInitialPosition=if(session.remote)archivePosition else null
         playing=session.channel;selectedChannel=session.channel.id;videoHeight=0;hudFocus=focus
         player.repeatMode=Player.REPEAT_MODE_OFF
@@ -547,10 +648,12 @@ class MainActivity : ComponentActivity() {
     }
     private fun returnToLive(channel:Channel?=playing) {
         if(channel==null)return
+        if(localPlayback&&channel.id==playing?.id){seekDraft=null;localPauseTime=null;timeshiftDelayed=false;player.seekToDefaultPosition();player.play();controls=true;interaction++;return}
         cancelArchiveLoad();archiveInitialPosition=null;pendingProgramme=null;archiveEnded=false;seekDraft=null;archiveSession=null
         player.stop();tune(channel,false);screen="player";controls=true;hudFocus="player-pause";interaction++
     }
     private fun seekArchive(position:Long) {
+        if(localPlayback){seekLocal(playbackTimelineStart()+position);return}
         val a=archiveSession
         val now=System.currentTimeMillis()
         if(a==null){
@@ -567,17 +670,18 @@ class MainActivity : ComponentActivity() {
         interaction++
     }
     private fun seekBy(delta:Long) {
+        if(localPlayback){seekLocal(localTime()+delta);return}
         val p=archiveSession?.programme?:programme(playing?.id)?:return
         val position=if(archiveSession!=null)currentArchivePosition() else System.currentTimeMillis()-p.start
         seekArchive(position+delta)
     }
-    private fun archiveSourceAvailable()=playing?.let{archiveSupported(it)}==true
+    private fun archiveSourceAvailable()=localPlayback||playing?.let{archiveSupported(it)}==true
     private fun hudKeys():List<String> = buildList {
         val p=archiveSession?.programme?:programme(playing?.id)
         val position=if(archiveSession!=null)currentArchivePosition() else if(p!=null)System.currentTimeMillis()-p.start else 0
-        if(archiveSourceAvailable()&&p!=null&&position>0)add("player-rewind")
+        if(if(localPlayback)localTime()>timeshift.window.start else archiveSourceAvailable()&&p!=null&&position>0)add("player-rewind")
         add("player-pause")
-        if(archiveSession!=null&&position<archiveSession!!.available(System.currentTimeMillis())-1000)add("player-forward")
+        if(if(localPlayback)timeshiftDelayed&&localTime()<timeshift.window.end-1000 else archiveSession!=null&&position<archiveSession!!.available(System.currentTimeMillis())-1000)add("player-forward")
         add("player-subtitles");add("player-favourite")
         add("player-buffer");add("player-live")
     }
@@ -585,12 +689,13 @@ class MainActivity : ComponentActivity() {
         interaction++
         when(key){
             "player-pause"->togglePlayback()
-            "player-rewind"->seekBy(-60000)
-            "player-forward"->seekBy(60000)
-            "player-live"->if(archiveSession!=null||!player.isPlaying)returnToLive()
+            "player-rewind"->seekBy(-5000)
+            "player-forward"->seekBy(5000)
+            "player-live"->if(timeshiftDelayed||archiveSession!=null||!player.isPlaying)returnToLive()
             "player-buffer"->{diagnosticsOpen=!diagnosticsOpen;controls=true}
             "player-timeline"->{
                 if(seekDraft!=null){val target=seekDraft!!;seekDraft=null;seekArchive(target)}
+                else if(localPlayback){seekDraft=(localTime()-playbackTimelineStart()).coerceAtLeast(0)}
                 else{val p=archiveSession?.programme?:programme(playing?.id)?:return;seekDraft=if(archiveSession!=null)currentArchivePosition() else (System.currentTimeMillis()-p.start).coerceAtLeast(0)}
             }
             "player-subtitles"->persist(updateTracks=true){it.copy(subtitles=!it.subtitles)}
@@ -704,7 +809,7 @@ class MainActivity : ComponentActivity() {
                     if(archiveSession==null&&!horizontal){val all=filtered();val i=all.indexOfFirst{it.id==playing?.id};if(all.isNotEmpty())tune(all[Math.floorMod(i+delta,all.size)],false)}
                     controls=true;hudFocus="player-pause"
                 }else if(seekDraft!=null){
-                    if(horizontal){val p=archiveSession?.programme?:programme(playing?.id);if(p!=null)seekDraft=(seekDraft!!+delta*300000L).coerceIn(0,(minOf(p.end,System.currentTimeMillis())-p.start).coerceAtLeast(0))}
+                    if(horizontal){if(localPlayback){val origin=playbackTimelineStart();seekDraft=(seekDraft!!+delta*300000L).coerceIn((timeshift.window.start-origin).coerceAtLeast(0),(minOf(timeshift.window.end,timelineProgramme()?.end?:Long.MAX_VALUE)-origin-1000).coerceAtLeast((timeshift.window.start-origin).coerceAtLeast(0)))}else{val p=archiveSession?.programme?:programme(playing?.id);if(p!=null)seekDraft=(seekDraft!!+delta*300000L).coerceIn(0,(minOf(p.end,System.currentTimeMillis())-p.start).coerceAtLeast(0))}}
                 }else if(horizontal){
                     if(hudFocus!="player-timeline"){
                         val keys=hudKeys();val index=keys.indexOf(hudFocus).coerceAtLeast(0)
@@ -715,7 +820,7 @@ class MainActivity : ComponentActivity() {
                 else if(delta>0&&hudFocus in listOf("player-subtitles","player-favourite")){
                     hudUtilityFocus=hudFocus
                     hudFocus=if(hudFocus=="player-subtitles")"player-buffer"else"player-live"
-                }else if(delta<0&&archiveSourceAvailable()&&(archiveSession?.programme?:programme(playing?.id))!=null)hudFocus="player-timeline"
+                }else if(delta<0&&archiveSourceAvailable()&&(localPlayback||(archiveSession?.programme?:programme(playing?.id))!=null))hudFocus="player-timeline"
                 else if(delta>0&&hudFocus !in listOf("player-live","player-buffer"))hudFocus="player-pause"
                 interaction++
             }
@@ -723,7 +828,7 @@ class MainActivity : ComponentActivity() {
         }
         if(event.action==AndroidKey.ACTION_DOWN && ::player.isInitialized) {
             when(event.keyCode){
-                AndroidKey.KEYCODE_MEDIA_STOP -> {cancelArchiveLoad();cancelRecovery();player.stop();playback="stopped";screen="guide";controls=true;return true}
+                AndroidKey.KEYCODE_MEDIA_STOP -> {cancelArchiveLoad();cancelRecovery();timeshift.stop();player.stop();playback="stopped";screen="guide";controls=true;return true}
                 AndroidKey.KEYCODE_MEDIA_PLAY_PAUSE -> {togglePlayback();controls=true;interaction++;return true}
                 AndroidKey.KEYCODE_MEDIA_PLAY -> {if(player.playerError!=null)retryPlayback()else resumePlayback();controls=true;interaction++;return true}
                 AndroidKey.KEYCODE_MEDIA_PAUSE -> {cancelArchiveLoad();cancelRecovery();pausePlayback();controls=true;return true}
@@ -758,10 +863,7 @@ class MainActivity : ComponentActivity() {
         }}
     }
     private fun validateUrl(){work {candidate=loadPlaylistUrl()}}
-    private fun replacePlaylists(old:AppState,lists:List<Playlist>):AppState {
-        val ids=lists.flatMap{it.channels}.map{it.id}.toSet()
-        return old.copy(playlists=lists,favourites=old.favourites.intersect(ids),history=old.history.filter{it in ids},last=old.last.takeIf{it in ids}.orEmpty(),epgBindings=old.epgBindings.filterKeys{it in ids},epgOffsets=old.epgOffsets.filterKeys{it in ids},playlistEpgSources=old.playlistEpgSources.filterKeys{id->lists.any{it.id==id}})
-    }
+    private fun replacePlaylists(old:AppState,lists:List<Playlist>)=PlaylistRefresh.replace(old,lists)
     private fun addSource(){work {
         val p=candidate?:when(sourceMode){
             "url"->loadPlaylistUrl()
@@ -769,19 +871,21 @@ class MainActivity : ComponentActivity() {
             else->throw UserError(tr("choose_a_playlist_url_or_file"))
         }
         val saved=p.copy(name=sourceName.trim().ifEmpty{p.name}.take(120))
-        val lists=if(editingPlaylist==null)data.playlists+saved else data.playlists.map{if(it.id==editingPlaylist)saved else it}
-        if(lists.size>15 || lists.sumOf{it.channels.size}>50000)throw UserError(tr("limit_reached_15_playlists_or_50_000_channels"))
-        change{replacePlaylists(it,lists)};epgRevision++
-        if(playing?.id !in data.channels.map{it.id}){cancelRecovery();player.stop();playing=null}
+        change{old->
+            val lists=if(editingPlaylist==null)old.playlists+saved else old.playlists.map{if(it.id==editingPlaylist)saved else it}
+            if(lists.size>15 || lists.sumOf{it.channels.size}>50000)throw UserError(tr("limit_reached_15_playlists_or_50_000_channels"))
+            replacePlaylists(old,lists)
+        };epgRevision++
+        if(playing?.id !in data.channels.map{it.id}){cancelRecovery();timeshift.stop();player.stop();playing=null}
         candidate=null;recentOrder.enter(false,data.history);group=BuiltinGroups.ALL;query="";selectedChannel=p.channels.firstOrNull()?.id.orEmpty();panelStack.clear();screen="guide";message=tr("playlist_saved_channels", p.channels.size)
     }}
     private fun deletePlaylist(){work{
         change{replacePlaylists(it,it.playlists.filter{p->p.id!=selectedPlaylist})};epgRevision++
-        if(playing?.id !in data.channels.map{it.id}){cancelRecovery();player.stop();playing=null}
+        if(playing?.id !in data.channels.map{it.id}){cancelRecovery();timeshift.stop();player.stop();playing=null}
         selectedChannel=data.channels.firstOrNull()?.id.orEmpty();group=BuiltinGroups.ALL;query="";recentOrder.enter(false,data.history)
         returnTo("playlists")
     }}
-    private fun chooseDocument(purpose:String) {
+    private fun chooseDocument(purpose:String) = withFileAccess {
         filePurpose=purpose;previousScreen=screen;error="";reviewingBackup=false;restoreState=null
         openPanel("files")
     }
@@ -816,16 +920,19 @@ class MainActivity : ComponentActivity() {
         if(text.isBlank())error=tr("no_url_in_the_clipboard")else if(text.length>8192)error=tr("the_url_is_too_long")else{sourceUrl=text.trim();candidate=null;error=""}
     }
     private fun refresh(p:Playlist){work {
-        if(p.source.isBlank())throw UserError(tr("this_local_playlist_is_stored_in_the_app_choose_a_new_file_to_update_i"))
-        val updated=withContext(Dispatchers.IO){http.newCall(Request.Builder().url(p.source).build()).execute().use { r ->
-            if(!r.isSuccessful)throw UserError(tr("the_source_returned_http", r.code))
-            val raw=SourceIO.text(SourceIO.read(r.body!!.byteStream(),SourceIO.MAX_PLAYLIST));p.copy(raw=raw,channels=M3u.parse(raw,p.id,p.source))
-        }}
-        change{old -> val lists=old.playlists.map{if(it.id==p.id)updated else it};val ids=lists.flatMap{it.channels}.map{it.id}.toSet();replacePlaylists(old,lists)}
+        val updated=PlaylistRefresh.download(p)
+        change{old ->
+            val current=old.playlists.find{it.id==p.id}
+            if(current==null||current.source!=p.source||current.raw!=p.raw)throw UserError(tr("the_source_has_changed_update_it_again"))
+            PlaylistRefresh.merge(old,p,updated)
+        }
+        playlistFailures=playlistFailures-p.id
+        EpgUpdateService.clearPlaylistFailure(p.id)
         epgRevision++
-        message=tr("playlist_updated_channels", updated.channels.size)
+        message=tr("playlist_updated_channels",updated.channels.size)
     }}
-    private fun startExport(){work {
+    private fun startExport() = withFileAccess { exportBackup() }
+    private fun exportBackup(){work {
         exportBytes=stateLock.withLock{val snapshot=data;withContext(Dispatchers.IO){BackupFile.encode(snapshot)}}
         val name="TVWave-${SimpleDateFormat("yyyyMMdd-HHmmss",Locale.ROOT).format(Date())}.${BackupFile.EXTENSION}"
         val intent=Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/octet-stream")
@@ -859,7 +966,7 @@ class MainActivity : ComponentActivity() {
     private fun applyRestore(){val restored=restoreState?:return;fontSaveJob?.cancel();fontPreview=null;work {
         EpgUpdateService.cancelAndWait(this@MainActivity)
         epgFailures=emptyMap();epgStatus=""
-        cancelRecovery();player.stop();playing=null
+        cancelRecovery();timeshift.stop();player.stop();playing=null
         change(resetCache=true){restored.copy(uiLanguage=restored.uiLanguage.ifEmpty{data.uiLanguage})};epgRevision++;loadFailed=false;restoreState=null;group=BuiltinGroups.ALL;query="";selectedChannel=restored.last.ifEmpty{restored.channels.firstOrNull()?.id.orEmpty()};panelStack.clear();screen="guide";message=tr("settings_and_playlists_restored");applyTracks()
     }}
     private fun programme(id:String?,time:Long=nowTime)=epgRows[id].orEmpty().lastOrNull{it.start<=time&&time<it.end}
@@ -896,7 +1003,7 @@ class MainActivity : ComponentActivity() {
                 Box(Modifier.offset(x=x).width(w).fillMaxHeight().then(focusSurface(chosen)).border(T.line,T.bg)
                     .archiveOutline(programmeHasArchive(c,p),if(chosen)T.onAccent else T.muted)
                     .focusProperties{canFocus=false}.clickable(enabled=active){selectedChannel=c.id;guideZone=1;guideTime=p.start;openProgrammeDetails()}.padding(horizontal=T.small,vertical=T.tiny),contentAlignment=Alignment.CenterStart){
-                    Text("${timeLabel(p.start)}  ${p.title}",color=if(chosen)T.onAccent else T.text,fontSize=T.channelName,lineHeight=T.channelLine,maxLines=2,overflow=TextOverflow.Ellipsis)
+                    Text(p.title,color=if(chosen)T.onAccent else T.text,fontSize=T.channelName,lineHeight=T.channelLine,maxLines=2,overflow=TextOverflow.Ellipsis)
                 }
             }
             if(nowTime in from until until)Box(Modifier.offset(x=width*((nowTime-from).toFloat()/10800000L)).width(T.focusLine).fillMaxHeight().background(T.danger))
@@ -1148,7 +1255,7 @@ class MainActivity : ComponentActivity() {
     }
     private fun programmeStatus(p:Programme)=when{p.start>nowTime->tr("up_next");p.end<=nowTime->tr("finished");else->tr("live_now")}
     private fun panelTitle(page:String)=when(page){
-        "updates"->tr("update_title")
+        "timeshift"->tr("timeshift");"updates"->tr("update_title")
         "epgOrder"->tr("guide_priority");"epgOffset"->tr("epg_time_offset");"playlistEpg"->tr("programme_guide_source");"phone"->tr("url_from_phone");"settings"->tr("settings");"playlists"->tr("playlists");"source"->if(editingPlaylist==null)tr("new_playlist")else tr("edit_playlist");"files"->tr("choose_file")
         "reminderTimes"->tr("reminder_times");"language"->tr("language");"appearance"->tr("appearance");"playback"->tr("playback");"audio"->tr("audio");"remote"->tr("remote_control")
         "startup"->tr("on_startup");"backup"->tr("backup");"restorePassword"->tr("legacy_backup");"restoreConfirm"->tr("restore_data")
@@ -1159,7 +1266,7 @@ class MainActivity : ComponentActivity() {
         "playlistMenu"->tr("playlist");"playlistDelete"->tr("delete_playlist");else->"TV Wave"
     }
     private fun defaultFocus(page:String=screen):String=when(page){
-        "updates"->"update-action"
+        "timeshift"->"timeshift-enabled";"updates"->"update-action"
         "epgOrder"->epgOrder.firstOrNull()?.let{"epg-move:${it.id}"}.orEmpty();"epgOffset"->"offset-reset";"playlistEpg"->"playlist-epg-auto";"phone"->"phone-close";"settings"->"playlists";"playlists"->data.playlists.firstOrNull()?.let{"playlist:${it.id}"}?:"add";"source"->if(candidate!=null)"source-add"else "source-url"
         "files"->"file-close"
         "reminderTimes"->"reminder-minute:5";"language"->"language:${L10n.language}";"appearance"->"font-size";"playback","audio"->"audio-language";"startup"->"resume";"backup"->if(loadFailed)"restore"else "export"
@@ -1195,7 +1302,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         // Scale dp and sp together. Keep the persisted fontPercent key for existing backups.
-        CompositionLocalProvider(LocalDensity provides Density(density.density*fontPercent/100f,density.fontScale)){AppContent()}
+        CompositionLocalProvider(LocalDensity provides Density(density.density*fontPercent/100f,density.fontScale)){AppContent();FileAccessDialog()}
     }
     @Composable private fun AppContent(){
         val rootFocus=remember{FocusRequester()}
@@ -1218,18 +1325,6 @@ class MainActivity : ComponentActivity() {
         }
         LaunchedEffect(activeReminder?.id,reminderInteracted){
             if(activeReminder!=null&&!reminderInteracted){repeat(15){delay(1000);reminderSeconds=14-it};activeReminder=null}
-        }
-        LaunchedEffect(loaded){
-            while(loaded&&!loadFailed){
-                if(!epgUpdating&&!busy)try{
-                    stateLock.withLock{
-                        val snapshot=data
-                        val changed=withContext(Dispatchers.IO){repository.maintain(snapshot)}
-                        if(changed)epgRevision++
-                    }
-                }catch(e:Exception){if(e is CancellationException)throw e;android.util.Log.w("TVWave","Cache maintenance deferred",e)}
-                delay(3600000)
-            }
         }
         LaunchedEffect(group){recentOrder.enter(group==BuiltinGroups.RECENT,data.history)}
         LaunchedEffect(loaded,data.sources,data.epgBindings,data.playlistEpgSources,epgRevision,nowTime/60000){
@@ -1291,7 +1386,7 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(screen,controls,playback,interaction,seekDraft,pendingProgramme,archiveEnded,diagnosticsOpen){if(screen=="player"&&controls&&playback=="playing"&&seekDraft==null&&pendingProgramme==null&&!archiveEnded){delay(3000);controls=false}}
             LaunchedEffect(message){if(message.isNotEmpty()&&screen in listOf("guide","player","details","browse","search")){delay(4500);message=""}}
             Box(Modifier.fillMaxSize().semantics{testTagsAsResourceId=true}.clipToBounds().background(T.bg).onPreviewKeyEvent{handleRemote(it.nativeKeyEvent)}.focusRequester(rootFocus).focusable()){
-                if(!loaded)Text(tr(if(optimizingGuide)"optimizing_programme_storage" else "opening_tv_wave"),Modifier.align(Alignment.Center).padding(T.safe).widthIn(max=640.dp),color=T.text,fontSize=T.title,textAlign=androidx.compose.ui.text.style.TextAlign.Center)
+                if(!loaded)CircularProgressIndicator(Modifier.align(Alignment.Center).size(40.dp).testTag("app-loading"),color=T.text)
                 else {
                     val base=when(screen){"browse"->"player";"details"->"details";"guide","player","reminders"->screen;else->backgroundScreen}
                     val overlay=screen !in listOf("guide","player","browse","details","reminders")
@@ -1629,17 +1724,25 @@ class MainActivity : ComponentActivity() {
         var failure by remember{mutableStateOf("")}
         var preview by remember{mutableStateOf<Pair<Channel,Programme?>?>(null)}
         var detail by remember{mutableStateOf<Programme?>(null)}
-        LaunchedEffect(guideSearch.submittedQuery,guideSearch.searchRevision,epgRevision,data.playlists,data.sources,data.epgBindings,data.playlistEpgSources,data.epgOffsets,nowTime/60000){
+        LaunchedEffect(guideSearch.submittedQuery,guideSearch.searchRevision,epgRevision,data.playlists,data.sources,data.epgBindings,data.playlistEpgSources,data.epgOffsets){
             val term=guideSearch.submittedQuery;failure=""
+            val searchStarted=android.os.SystemClock.elapsedRealtime()
+            val searchRequest=guideSearch.searchRevision
+            android.util.Log.i("TVWaveSearch","start request=$searchRequest length=${term.length} channels=${data.channels.size}")
             if(term.isEmpty()){guideSearch.results=GuideSearchResults();guideSearch.completedQuery=term;searching=false;return@LaunchedEffect}
             searching=true
             try{
                 val snapshot=data;val time=nowTime
+                // Channel names are available immediately, even while the guide is searched.
+                val channels=withContext(Dispatchers.Default){EpgSearch.findChannels(snapshot,term)}
+                guideSearch.results=GuideSearchResults(channels=channels)
+                guideSearch.completedQuery=term
                 val result=withContext(Dispatchers.IO){val job=currentCoroutineContext();EpgSearch.find(repository.readableDatabase,snapshot,term,time){job.ensureActive()}}
+                android.util.Log.i("TVWaveSearch","complete request=$searchRequest channels=${result.channels.size} programmes=${result.programmes.size} elapsedMs=${android.os.SystemClock.elapsedRealtime()-searchStarted}")
                 guideSearch.results=result;guideSearch.completedQuery=term
-            }catch(e:CancellationException){throw e}
-            catch(e:Exception){failure=tr("search_failed")}
-            finally{searching=false}
+            }catch(e:CancellationException){android.util.Log.i("TVWaveSearch","cancel request=$searchRequest elapsedMs=${android.os.SystemClock.elapsedRealtime()-searchStarted}");throw e}
+            catch(e:Exception){android.util.Log.w("TVWaveSearch","failed request=$searchRequest type=${e.javaClass.simpleName}");failure=tr("search_failed")}
+            finally{if(currentCoroutineContext().isActive)searching=false}
         }
         LaunchedEffect(preview,epgRevision,data.epgOffsets){
             detail=null
@@ -1691,7 +1794,7 @@ class MainActivity : ComponentActivity() {
                 onFile={if(!busy)readFile(it)},onClose=::back)
             return
         }
-        Column(Modifier.align(Alignment.CenterEnd).fillMaxHeight().fillMaxWidth(if(page=="phone")T.phoneDrawerFraction else if(page=="appearance").5f else if(page=="updates").46f else T.drawerFraction).background(T.surface)
+        Column(Modifier.align(Alignment.CenterEnd).fillMaxHeight().fillMaxWidth(if(page=="phone")T.phoneDrawerFraction else if(page in listOf("appearance","timeshift")).5f else if(page=="updates").46f else T.drawerFraction).background(T.surface)
             .padding(start=T.pad,end=T.safe,top=T.drawerTop,bottom=T.drawerBottom),verticalArrangement=Arrangement.spacedBy(T.small)){
             Text(if(panelStack.isNotEmpty())panelTitle(panelStack.last()).uppercase(L10n.locale)else tr("tv_wave"),color=T.muted,fontSize=T.micro,lineHeight=T.micro*1.3f,maxLines=1,overflow=TextOverflow.Ellipsis)
             Text(panelTitle(page),color=T.text,fontSize=T.title,lineHeight=(T.title)*1.2f,fontWeight=FontWeight.SemiBold,maxLines=2,overflow=TextOverflow.Ellipsis)
@@ -1713,6 +1816,7 @@ class MainActivity : ComponentActivity() {
                         "epgDelete"->{Caption(tr("this_source_and_its_matches_will_be_removed_your_playlists_will_be_kep"));Action(tr("cancel_m245"),key="delete-cancel"){back()};Action(tr("delete"),key="epg-delete-confirm",enabled=!busy){deleteEpg()}}
                         "playlistMenu"->PlaylistMenu()
                         "playlistDelete"->{Caption(tr("this_playlist_and_its_channels_will_be_removed_from_the_app"));Action(tr("cancel_m245"),key="delete-cancel"){back()};Action(tr("delete"),key="playlist-delete-confirm",enabled=!busy){deletePlaylist()}}
+                        "timeshift"->TimeshiftScreen()
                         "appearance"->AppearanceScreen()
                         "reminderTimes"->reminderMinuteOptions.forEach{minutes->ToggleSetting(tr(if(minutes==60)"reminder_one_hour"else"reminder_minutes_before",minutes),"reminder-minute:$minutes",minutes in data.reminderMinutes){persist{it.copy(reminderMinutes=if(minutes in it.reminderMinutes)it.reminderMinutes-minutes else it.reminderMinutes+minutes)}}}
                         "language"->LanguageOptions()
@@ -1894,6 +1998,7 @@ class MainActivity : ComponentActivity() {
         Caption("TV Wave ${BuildConfig.VERSION_NAME}")
     }
     @Composable private fun PlaylistsScreen(){
+        if(playlistFailures.isNotEmpty())Caption(tr("some_playlists_not_updated"))
         data.playlists.forEach{p->Setting(p.name,"playlist:${p.id}",subtitle=tr("channels_m261", p.channels.size, if(p.source.isEmpty())tr("file")else tr("url"))){selectedPlaylist=p.id;openPanel("playlistMenu")}}
         if(data.playlists.size<15)Setting(tr("add"),"add"){newSource()}else Caption(tr("15_playlists_added"))
     }
@@ -1902,13 +2007,50 @@ class MainActivity : ComponentActivity() {
         Setting(tr("edit"),"playlist-edit"){newSource(p)}
         Setting(tr("programme_guide_source"),"playlist-epg",subtitle=data.sources.find{it.id==data.playlistEpgSources[p.id]}?.name?:tr("automatic_epg_source_order")){epgPlaylistId=p.id;openPanel("playlistEpg")}
         Setting(tr("delete"),"playlist-delete"){openPanel("playlistDelete")}
-        if(p.source.isNotEmpty())Setting(tr("update_channels"),"playlist-refresh"){refresh(p)}
+        if(p.source.isNotBlank())Action(tr("update_channels"),key="playlist-refresh",enabled=!busy){refresh(p)}
+        playlistFailures[p.id]?.let{Caption(it)}
     }}
+    @Composable private fun TimeshiftScreen(){
+        val toggleFocus=remember{FocusRequester()}
+        ToggleSetting(tr("timeshift"),"timeshift-enabled",data.timeshiftEnabled,Modifier.focusRequester(toggleFocus)){
+            lifecycleScope.launch {
+                try {
+                    change{it.copy(timeshiftEnabled=!it.timeshiftEnabled)}
+                } catch(e:CancellationException){throw e} catch(e:Exception){error=safeError(e)}
+            }
+        }
+        var mb by remember{mutableIntStateOf(data.timeshiftMb)}
+        var focused by remember{mutableStateOf(false)}
+        fun save(value:Int){mb=value.coerceIn(256,2048);timeshift.limitBytes=mb.toLong()*1024*1024;persist{it.copy(timeshiftMb=mb)}}
+        Row(Modifier.fillMaxWidth().padding(top=T.gap),verticalAlignment=Alignment.CenterVertically){
+            Text(tr("timeshift_limit"),Modifier.weight(1f),color=T.text,fontSize=T.body,fontWeight=FontWeight.SemiBold)
+            val sizeLabel=if(mb<1024)tr("timeshift_mb",mb) else {
+                val gb=java.text.NumberFormat.getNumberInstance(L10n.locale).apply{maximumFractionDigits=2}.format(mb/1024.0)
+                tr("timeshift_gb",gb)
+            }
+            Text(sizeLabel,color=T.text,fontSize=T.body,modifier=Modifier.testTag("timeshift-value"))
+        }
+        InterfaceScaleSlider(value=mb,onChange={mb=it},onFinished={save(mb)},min=256,max=2048,step=256,
+            modifier=Modifier.fillMaxWidth().height(56.dp).testTag("timeshift-size")
+                .onFocusChanged{focused=it.isFocused;if(it.isFocused)panelFocus["timeshift"]="timeshift-size"}
+                .border(T.focusLine,if(focused)T.accent else Color.Transparent,RoundedCornerShape(10.dp)).padding(horizontal=T.gap)
+                .onPreviewKeyEvent{e->val k=e.nativeKeyEvent
+                    if(k.keyCode in listOf(AndroidKey.KEYCODE_DPAD_LEFT,AndroidKey.KEYCODE_DPAD_RIGHT)){
+                        if(k.action==AndroidKey.ACTION_DOWN)save(mb+if(k.keyCode==AndroidKey.KEYCODE_DPAD_RIGHT)256 else -256)
+                        true
+                    }else if(k.keyCode in listOf(AndroidKey.KEYCODE_DPAD_UP,AndroidKey.KEYCODE_DPAD_DOWN)){
+                        if(k.keyCode==AndroidKey.KEYCODE_DPAD_UP&&k.action==AndroidKey.ACTION_DOWN)toggleFocus.requestFocus()
+                        true
+                    }else false
+                })
+        Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween){Caption(tr("font_smaller"));Caption(tr("font_larger"))}
+    }
     @Composable private fun AudioScreen(){
         Setting(tr("audio_language"),"audio-language",when(data.audioLanguage){"ru"->tr("russian");"en"->tr("english");else->tr("original")}){
             persist(updateTracks=true){it.copy(audioLanguage=when(it.audioLanguage){"ru"->"en";"en"->"";else->"ru"})}
         }
         ToggleSetting(tr("subtitles"),"subtitles",data.subtitles){persist(updateTracks=true){it.copy(subtitles=!it.subtitles)}}
+        Setting(tr("timeshift"),"timeshift"){openPanel("timeshift")}
         Caption(tr("audio_tracks_and_subtitles_depend_on_the_channel"))
     }
     @Composable private fun MoreScreen(){
@@ -2113,14 +2255,17 @@ class MainActivity : ComponentActivity() {
             }
         }
         val a=archiveSession
-        val current=a?.programme?:programme(playing?.id)
+        val local=timeshiftTick.let{localPlayback}
+        val current=timelineProgramme()
         var liveNow by remember{mutableLongStateOf(System.currentTimeMillis())}
         LaunchedEffect(controls,a){while(controls&&a==null){liveNow=System.currentTimeMillis();delay(1000)}}
-        val duration=current?.let{(it.end-it.start).coerceAtLeast(1)}?:0
-        val available=current?.let{(liveNow-it.start).coerceIn(0,duration)}?:0
-        val position=if(a!=null)archivePosition.coerceAtMost(duration)else available
-        val canSeek=active&&archiveSourceAvailable()&&current!=null
-        val forward=a!=null&&position<a.available(System.currentTimeMillis())-1000
+        val saved=liveNow.let{if(local)timeshift.window else null}
+        val origin=current?.start?:saved?.start?:0L
+        val duration=current?.let{(it.end-it.start).coerceAtLeast(1)}?:saved?.let{it.end-it.start}?:0L
+        val available=if(local)(saved!!.end-origin).coerceIn(0,duration)else current?.let{(liveNow-it.start).coerceIn(0,duration)}?:0L
+        val position=if(local)(localTime()-origin).coerceIn(0,duration)else if(a!=null)archivePosition.coerceAtMost(duration)else available
+        val canSeek=active&&archiveSourceAvailable()&&(local||current!=null)
+        val forward=if(local)timeshiftDelayed&&localTime()<saved!!.end-1000 else a!=null&&position<a.available(System.currentTimeMillis())-1000
         LaunchedEffect(canSeek,position>0,forward,playback){
             if(hudFocus=="player-timeline"&&!canSeek||hudFocus!="player-timeline"&&hudFocus !in hudKeys())hudFocus="player-pause"
         }
@@ -2135,10 +2280,10 @@ class MainActivity : ComponentActivity() {
                 Box(Modifier.align(Alignment.BottomCenter)){
                     PlaybackHud(current?.title?:playing?.name?:tr("live_tv"),
                         (current?.let{if(a!=null)programmeSpan(it)else timeRange(it)}?:missingEpg(playing?.id))+(if(videoHeight>0)" · ${videoHeight}p"else ""),
-                        a==null&&player.isPlaying,if(a!=null)tr("recording")else if(playback=="paused")tr("pause")else tr("not_live"),hudMinimum,if(recoveryJob?.isActive==true)tr("cancel")else if(playback in listOf("error","stopped"))tr("retry")else if(player.isPlaying)tr("pause")else tr("watch"),!player.isPlaying,
+                        a==null&&!timeshiftDelayed&&player.isPlaying,if(local&&timeshiftDelayed)tr("timeshift_delayed")else if(a!=null)tr("recording")else if(playback=="paused")tr("pause")else tr("not_live"),hudMinimum,if(recoveryJob?.isActive==true)tr("cancel")else if(playback in listOf("error","stopped"))tr("retry")else if(player.isPlaying)tr("pause")else tr("watch"),!player.isPlaying,
                         seekDraft?:position,duration,if(a!=null)a.available(System.currentTimeMillis())else available,seekDraft!=null,
-                        canSeek&&position>0,forward,canSeek,
-                        data.subtitles,playing?.id in data.favourites,hudFocus,hudRequests,{hudFocus=it},::hudAction,archiveDays=channelArchiveDays(playing),health=health,diagnosticsEnabled=diagnosticsOpen)
+                        canSeek&&(if(local)localTime()>saved!!.start else position>0),forward,canSeek,
+                        data.subtitles,playing?.id in data.favourites,hudFocus,hudRequests,{hudFocus=it},::hudAction,archiveDays=channelArchiveDays(playing),health=health,diagnosticsEnabled=diagnosticsOpen,savedStart=saved?.let{(it.start-origin).coerceIn(0,duration)},savedEnd=saved?.let{(it.end-origin).coerceIn(0,duration)})
                 }
             }
             if(active&&controls&&diagnosticsOpen)PlaybackHealthPanel(health,Modifier.align(Alignment.TopEnd).padding(top=80.dp,end=T.safe).width(360.dp))

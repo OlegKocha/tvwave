@@ -59,6 +59,7 @@ if a.flow in ['all','backup']:
  (out/'backup-check.json').write_text(json.dumps({'bytes':len(content),'playlists':3,'epgSources':3,'fontPercent':85,'programmeCache':False,'checksumValid':True,'playlistAssignments':1,'channelOffsets':2,'manualBindings':1},indent=2))
  # Real reinstall. The exported file stays in shared Downloads; no staging/copy into app-private storage.
  shell('uninstall','tv.tvwave.app.debug');shell('install',str(project/'app/build/outputs/apk/debug/app-debug.apk'))
+ shell('install','-r',str(project/'app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk'))
  assert name in shell('shell','ls','/sdcard/Download/TVWave').stdout.decode()
  shell('shell','appops','set','tv.tvwave.app.debug','MANAGE_EXTERNAL_STORAGE','allow')
  flow('restore-empty',env={'BACKUP_NAME':'01-valid.tvwb'});native('assertRestoredConfiguration');flow('restore-use')

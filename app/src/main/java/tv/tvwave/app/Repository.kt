@@ -17,7 +17,7 @@ import javax.crypto.spec.GCMParameterSpec
 
 /** Encrypted configuration plus a small encrypted viewing snapshot; full saves replace both atomically.
  * Keystore never participates in portable backup encryption. All calls run off UI thread. */
-class Repository(context: Context) : SQLiteOpenHelper(context,"tvwave.db",null,8) {
+class Repository(context: Context) : SQLiteOpenHelper(context,"tvwave.db",null,10) {
     override fun onCreate(db: SQLiteDatabase) { db.execSQL("CREATE TABLE state (id INTEGER PRIMARY KEY, payload BLOB NOT NULL)");EpgCache.create(db);CacheMaintenance.create(db);createViewing(db) }
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) { EpgCache.migrate(db);CacheMaintenance.create(db);createViewing(db);if(oldVersion<4)db.execSQL("UPDATE guide_meta SET updated=0") }
     private val schedules=ScheduleMemoryCache()
@@ -46,8 +46,8 @@ class Repository(context: Context) : SQLiteOpenHelper(context,"tvwave.db",null,8
     }
     @Synchronized fun schedule(channel:String,from:Long,to:Long,limit:Int=300,offsetMinutes:Int=0):List<Programme> =
         schedules.get(channel,from,to,limit,offsetMinutes){start,end,count->EpgCache.schedule(readableDatabase,channel,start,end,count,offsetMinutes)}
-    @Synchronized fun maintain(state:AppState,now:Long=System.currentTimeMillis(),compact:Boolean=false,onFilter:()->Unit={}):Boolean {
-        val cleaned=CacheMaintenance.clean(writableDatabase,state,now)
+    @Synchronized fun maintain(state:AppState,now:Long=System.currentTimeMillis(),compact:Boolean=false,onFilter:()->Unit={},force:Boolean=false):Boolean {
+        val cleaned=CacheMaintenance.clean(writableDatabase,state,now,force=force)
         val changed=CacheMaintenance.filterSchedules(writableDatabase,state,force=cleaned,onStart=onFilter)||cleaned
         if(changed)schedules.clear()
         if(compact)runCatching{CacheMaintenance.compactIfUseful(writableDatabase)}

@@ -1,0 +1,48 @@
+appId: tv.tvwave.app.debug
+---
+- launchApp:
+    permissions:
+      all: deny
+- assertVisible:
+    id: restore
+- tapOn:
+    id: restore
+- assertVisible:
+    id: file-access-dialog
+- pressKey: back
+- assertNotVisible:
+    id: file-access-dialog
+- tapOn:
+    id: restore
+- tapOn:
+    id: file-access-settings
+- repeat:
+    while:
+      notVisible: "Not allowed"
+    commands:
+      - pressKey: Remote Dpad Down
+- tapOn: "Not allowed"
+- pressKey: back
+- assertVisible:
+    id: file-browser
+- tapOn:
+    id: "file:/storage/emulated/0/Download/permission-restore.tvwb"
+- extendedWaitUntil:
+    visible:
+      id: restore-summary
+    timeout: 15000
+- takeScreenshot: backup-verified
+- tapOn:
+    id: restore-apply
+- extendedWaitUntil:
+    visible:
+      id: guide-brand
+    timeout: 15000
+- takeScreenshot: restored-guide
+- pressKey: home
+- launchApp:
+    stopApp: false
+    permissions:
+      all: deny
+- assertVisible:
+    id: guide-brand

@@ -13,7 +13,7 @@ import kotlinx.coroutines.*
 @RunWith(AndroidJUnit4::class)
 class LogoDeviceTest {
     private val ctx get()=InstrumentationRegistry.getInstrumentation().targetContext.also{check(it.packageName=="tv.tvwave.app.debug");check(android.os.Build.MODEL.contains("sdk"))}
-    private val host="http://10.0.2.2:8767"
+    private val host="http://10.0.2.2:8777"
     @Test fun seed(){
         TvFixture.seed(2)
         Repository(ctx).use{repo->

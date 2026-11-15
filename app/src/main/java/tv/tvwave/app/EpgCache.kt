@@ -10,11 +10,14 @@ object EpgCache {
     fun create(db:SQLiteDatabase){
         db.execSQL("CREATE TABLE IF NOT EXISTS guide_catalog (source TEXT, epg TEXT, name TEXT, aliases TEXT, icon TEXT NOT NULL DEFAULT '', PRIMARY KEY(source,epg))")
         db.execSQL("CREATE TABLE IF NOT EXISTS guide_programme (source TEXT, epg TEXT, start INTEGER, end INTEGER, title TEXT, description TEXT, PRIMARY KEY(source,epg,start))")
+        // Search reads titles without touching the much larger description pages.
+        db.execSQL("CREATE INDEX IF NOT EXISTS guide_programme_title_search ON guide_programme(title,source,epg,start,end)")
         db.execSQL("CREATE TABLE IF NOT EXISTS guide_meta (source TEXT PRIMARY KEY,url TEXT,updated INTEGER)")
         db.execSQL("CREATE TABLE IF NOT EXISTS guide_link (channel TEXT PRIMARY KEY,source TEXT,epg TEXT)")
         db.execSQL("CREATE TABLE IF NOT EXISTS guide_summary (source TEXT PRIMARY KEY, catalog_count INTEGER, programmes INTEGER, until_time INTEGER, day_start INTEGER, day_end INTEGER, tomorrow INTEGER)")
     }
     fun migrate(db:SQLiteDatabase){
+        db.execSQL("DROP INDEX IF EXISTS guide_programme_search")
         create(db)
         val hasIcon=db.rawQuery("PRAGMA table_info(guide_catalog)",null).use{c->var found=false;while(c.moveToNext())if(c.getString(1)=="icon")found=true;found}
         if(!hasIcon)db.execSQL("ALTER TABLE guide_catalog ADD COLUMN icon TEXT NOT NULL DEFAULT ''")

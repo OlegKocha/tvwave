@@ -24,7 +24,7 @@ import java.security.MessageDigest
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
-data class EpgUpdateState(val running:Boolean=false,val sourceId:String="",val status:String="",val failures:Map<String,String> = emptyMap(),val revision:Long=0)
+data class EpgUpdateState(val running:Boolean=false,val sourceId:String="",val status:String="",val failures:Map<String,String> = emptyMap(),val revision:Long=0,val playlistRevision:Long=0,val playlistFailures:Map<String,String> = emptyMap())
 
 /** Finite user-visible import; independent of Activity lifetime. No playback service. */
 class EpgUpdateService:Service(){
@@ -32,6 +32,7 @@ class EpgUpdateService:Service(){
         val stateLock=Mutex()
         private val mutable=MutableStateFlow(EpgUpdateState())
         val state=mutable.asStateFlow()
+        fun clearPlaylistFailure(id:String){mutable.value=mutable.value.copy(playlistFailures=mutable.value.playlistFailures-id)}
         private var instance:EpgUpdateService?=null
         private var cancelling=false
         private const val NOTIFICATION=42
@@ -116,9 +117,53 @@ class EpgUpdateService:Service(){
         if(SystemClock.elapsedRealtime()-notified>1000){notified=SystemClock.elapsedRealtime();getSystemService(NotificationManager::class.java).notify(NOTIFICATION,notification(text))}
     }
     private class SelectionChanged:Exception()
+    private suspend fun refreshPlaylists(){
+        val playlists=withContext(worker){stateLock.withLock{Repository(this@EpgUpdateService).use{it.load().playlists.filter{p->p.source.isNotBlank()}}}}
+        mutable.value=mutable.value.copy(playlistFailures=emptyMap())
+        for(playlist in playlists){
+            currentCoroutineContext().ensureActive()
+            progress(EpgSource("",playlist.name,""),tr("refreshing_playlist",playlist.name))
+            try {
+                val downloaded=PlaylistRefresh.download(playlist)
+                withContext(worker){stateLock.withLock{
+                    Repository(this@EpgUpdateService).use{repo->
+                        val latest=repo.load()
+                        val next=PlaylistRefresh.merge(latest,playlist,downloaded)
+                        if(next!=latest){
+                            repo.save(next)
+                            mutable.value=mutable.value.copy(playlistRevision=mutable.value.playlistRevision+1)
+                        }
+                    }
+                }}
+            }catch(e:CancellationException){throw e}
+            catch(e:Exception){
+                logFailure("playlist",e)
+                val error=if(e is UserError)e.message.orEmpty()else tr("playlist_refresh_failed")
+                mutable.value=mutable.value.copy(playlistFailures=mutable.value.playlistFailures+(playlist.id to error))
+            }
+        }
+    }
+    /** Once per update cycle. Existing usable schedules survive a failed download. */
+    private suspend fun maintainBeforeUpdate(){
+        progress(EpgSource("","",""),tr("cleaning_old_programme_data"))
+        try {
+            withContext(worker){
+                CacheMaintenance.cleanAbandonedFiles(cacheDir,System.currentTimeMillis())
+                stateLock.withLock {
+                    Repository(this@EpgUpdateService).use { repo->
+                        if(repo.maintain(repo.load(),force=true))
+                            mutable.value=mutable.value.copy(revision=mutable.value.revision+1)
+                    }
+                }
+            }
+        }catch(e:CancellationException){throw e}
+        catch(e:Exception){logFailure("maintenance",e)}
+    }
     private suspend fun runQueue(){
         mutable.value=mutable.value.copy(running=true)
         val began=SystemClock.elapsedRealtime()
+        refreshPlaylists()
+        if(pending(this).isNotEmpty())maintainBeforeUpdate()
         var pruned=false
         var completed=0
         while(pending(this).isNotEmpty()){

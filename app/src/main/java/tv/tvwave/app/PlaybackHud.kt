@@ -35,7 +35,7 @@ fun PlaybackHud(
     position:Long, duration:Long, available:Long, editing:Boolean,
     canRewind:Boolean, canForward:Boolean, canSeek:Boolean, subtitles:Boolean, favourite:Boolean,
     wanted:String, requests:MutableMap<String,FocusRequester>, onFocus:(String)->Unit,
-    onAction:(String)->Unit, archiveDays:Int=0, health:PlaybackHealth=PlaybackHealth(), diagnosticsEnabled:Boolean=false
+    onAction:(String)->Unit, archiveDays:Int=0, health:PlaybackHealth=PlaybackHealth(), diagnosticsEnabled:Boolean=false, savedStart:Long?=null, savedEnd:Long?=null
 ) {
     val compact=LocalDensity.current.fontScale>1.1f
     val progress=if(duration>0)position.toFloat()/duration else 0f
@@ -59,7 +59,9 @@ fun PlaybackHud(
                 val y=size.height/2
                 drawLine(T.hudTrack,Offset(0f,y),Offset(size.width,y),T.hudTrackHeight.toPx())
                 drawLine(T.inputBorder,Offset(0f,y),Offset(size.width*loaded.coerceIn(0f,1f),y),T.hudTrackHeight.toPx())
-                drawLine(T.accent,Offset(0f,y),Offset(size.width*progress.coerceIn(0f,1f),y),T.hudTrackHeight.toPx())
+                if(savedStart!=null&&savedEnd!=null&&duration>0){
+                    drawLine(T.timeshiftTrack,Offset(size.width*(savedStart.toFloat()/duration).coerceIn(0f,1f),y),Offset(size.width*(savedEnd.toFloat()/duration).coerceIn(0f,1f),y),T.timeshiftTrackHeight.toPx())
+                }else drawLine(T.accent,Offset(0f,y),Offset(size.width*progress.coerceIn(0f,1f),y),T.hudTrackHeight.toPx())
                 if(duration>0)drawCircle(T.accent,T.hudKnob.toPx()/2,Offset(size.width*progress.coerceIn(0f,1f),y))
             }
         }
@@ -75,9 +77,9 @@ fun PlaybackHud(
             // At a larger interface scale, keep the playback buttons clear of buffer/live actions.
             val transportAlignment=if(maxWidth<800.dp)Alignment.CenterStart else Alignment.Center
             Row(Modifier.align(transportAlignment),horizontalArrangement=Arrangement.spacedBy(T.small),verticalAlignment=Alignment.CenterVertically){
-                HudButton("player-rewind",tr("1_min"),null,"rewind",canRewind,false,wanted,requests,onFocus,onAction,true,showLabel=false)
+                HudButton("player-rewind",tr("rewind_5_seconds"),null,"rewind",canRewind,false,wanted,requests,onFocus,onAction,true,showLabel=false)
                 HudButton("player-pause",playLabel,null,if(paused)"play"else"pause",true,false,wanted,requests,onFocus,onAction,true,showLabel=false)
-                HudButton("player-forward",tr("1_min_m366"),null,"forward",canForward,false,wanted,requests,onFocus,onAction,true,showLabel=false)
+                HudButton("player-forward",tr("forward_5_seconds"),null,"forward",canForward,false,wanted,requests,onFocus,onAction,true,showLabel=false)
             }
             Row(Modifier.align(Alignment.CenterEnd),verticalAlignment=Alignment.Top,horizontalArrangement=Arrangement.spacedBy(T.tiny)){
             val bufferRequest=remember{FocusRequester()};var bufferFocused by remember{mutableStateOf(false)}

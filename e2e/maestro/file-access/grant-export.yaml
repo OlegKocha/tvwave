@@ -1,0 +1,14 @@
+appId: tv.tvwave.app.debug
+---
+- assertVisible:
+    id: file-access-dialog
+- tapOn:
+    id: file-access-settings
+- tapOn: "Not allowed"
+- pressKey: back
+- extendedWaitUntil:
+    visible: ".*Копия проверена и сохранена.*"
+    timeout: 15000
+- assertNotVisible:
+    id: file-access-dialog
+- takeScreenshot: backup-export-granted

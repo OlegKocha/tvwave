@@ -1,0 +1,10 @@
+appId: tv.tvwave.app.debug
+---
+- runFlow: ../open-epg.yaml
+- pressKey: Remote Dpad Center
+- tapOn:
+    id: epg-refresh-one
+- extendedWaitUntil:
+    visible: '.*Успешно обновлена.*2 передач.*'
+    timeout: 30000
+- takeScreenshot: epg-one-completed

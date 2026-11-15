@@ -2,6 +2,10 @@
   "locale": "en",
   "nativeName": "English",
   "strings": {
+    "file_access_title": "File access",
+    "file_access_explanation": "Allow TV Wave to access files to create and restore backups and select playlists. Enable access in Android settings, then return to the app.",
+    "file_access_unavailable": "Could not open access settings. Allow file access in Android settings.",
+
     "catch_up_available": "Catch-up available",
     "watch_from_start_available": "Watch from start available",
     "the_backup_password_must_contain_at_least_8_characters": "The backup password must contain at least 8 characters",
@@ -363,6 +367,8 @@
     "no_timing_information": "No timing information",
     "added": "Added",
     "1_min": "−1 min",
+    "rewind_5_seconds": "Rewind 5 seconds",
+    "forward_5_seconds": "Forward 5 seconds",
     "1_min_m366": "+1 min",
     "go_live_m367": "Go live",
     "storage_integrity_check_failed": "Storage integrity check failed",
@@ -507,6 +513,17 @@
     "search_go_results": "→ Results",
     "reminder_times": "Reminder timing",
     "reminder_one_hour": "1 hour before",
-    "reminder_minutes_before": "{p1} minutes before"
+    "reminder_minutes_before": "{p1} minutes before",
+    "timeshift": "Timeshift",
+    "timeshift_limit": "Buffer size",
+    "timeshift_mb": "{p1} MB",
+    "timeshift_gb": "{p1} GB",
+    "timeshift_delayed": "Delayed live TV",
+    "timeshift_unavailable": "Local timeshift is unavailable for this stream. Continuing live playback.",
+    "timeshift_expired": "Older segments were removed. Continuing from the earliest available recording.",
+    "playlist_refresh_failed": "Could not update the playlist. The previous channel list has been kept.",
+    "refreshing_playlist": "Updating playlist “%s”…",
+    "some_playlists_not_updated": "Some playlists could not be updated. Previous channel lists have been kept. Open a playlist for details.",
+    "cleaning_old_programme_data": "Cleaning up old programme data…"
   }
 }

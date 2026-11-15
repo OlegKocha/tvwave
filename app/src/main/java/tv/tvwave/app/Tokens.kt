@@ -37,6 +37,7 @@ object T {
     val loadingSize=40.dp; val loadingStroke=3.dp
     val transportCircle=40.dp; val hudUtilityCircle=30.dp
     val hudUtilityWidth=84.dp; val hudTimelineHeight=30.dp; val hudTrackHeight=3.dp
+    val timeshiftTrack=Color(0xFF2B82FF); val timeshiftTrackHeight=6.dp
     val hudKnob=8.dp; val hudDot=6.dp; val hudCompactTitle=20.sp; val hudLabel=12.sp
     const val hudDisabledAlpha=.32f
     val veil=Color.Black.copy(alpha=.60f)

@@ -6,9 +6,10 @@ p=argparse.ArgumentParser();p.add_argument('--output',required=True);p.add_argum
 project=Path(__file__).resolve().parents[1];root=project.parents[2];out=Path(a.output).resolve();out.mkdir(parents=True,exist_ok=True)
 adb=[str(root/'work/android-tools/sdk/platform-tools/adb'),'-s','emulator-5556'];results=[]
 def shell(*args):return subprocess.run(adb+list(args),capture_output=True,check=True)
+# Isolate player retries from the separate HLS timeshift capability probe.
 def seed(media='http://10.0.2.2:8765/video.mp4'):
  shell('shell','am','force-stop','tv.tvwave.app.debug')
- r=shell('shell','am','instrument','-w','-e','class','tv.tvwave.app.TvNavigationTest#seedForMaestro','-e','media',media,'tv.tvwave.app.debug.test/androidx.test.runner.AndroidJUnitRunner')
+ r=shell('shell','am','instrument','-w','-e','class','tv.tvwave.app.TvNavigationTest#seedForMaestro','-e','media',media,'-e','timeshift','false','tv.tvwave.app.debug.test/androidx.test.runner.AndroidJUnitRunner')
  assert b'OK (1 test)' in r.stdout
 
 def flow(name,label=None):

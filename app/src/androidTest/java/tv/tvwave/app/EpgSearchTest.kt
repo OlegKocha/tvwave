@@ -40,15 +40,31 @@ class EpgSearchTest {
         assertTrue(EpgSearch.find(db,state(),"  ",now).channels.isEmpty())
     }}
     @Test fun boundedResultsStillCountAllMatchesAndRespectCancellation(){fixture{db->
-        repeat(250){row(db,title="Матч $it",start=now+it*60000L,end=now+(it+1)*60000L)}
+        repeat(1250){row(db,title="Матч $it",start=now+it*60000L,end=now+(it+1)*60000L)}
         val results=EpgSearch.find(db,state(),"матч",now)
-        assertEquals(500,results.programmeCount)
+        assertEquals(2500,results.programmeCount)
         assertEquals(EpgSearch.LIMIT,results.programmes.size)
         assertEquals("a",results.programmes.first().channel.id)
         var cancelled=false
         try{EpgSearch.find(db,state(),"матч",now){throw java.util.concurrent.CancellationException()}}
         catch(e:java.util.concurrent.CancellationException){cancelled=true}
         assertTrue(cancelled)
+    }}
+    @Test fun repeatedTitleAcrossPagesKeepsEveryMatchingBroadcast(){fixture{db->
+        repeat(1100){i->row(db,title="Повтор передачи",start=now+i*1000L,end=now+i*1000L+600000)}
+        val results=EpgSearch.find(db,state(),"повтор",now)
+        assertEquals(2200,results.programmeCount)
+        assertEquals(EpgSearch.LIMIT,results.programmes.size)
+        assertEquals(EpgSearch.LIMIT,results.programmes.map{it.key}.distinct().size)
+    }}
+    @Test fun titleScanUsesCoveringIndexAfterMigration(){fixture{db->
+        db.execSQL("DROP INDEX guide_programme_title_search")
+        EpgCache.migrate(db)
+        val plan=db.rawQuery("EXPLAIN QUERY PLAN SELECT source,epg,start,end FROM guide_programme WHERE title=? AND start<? AND end>? ORDER BY source,epg,start LIMIT 512",
+            arrayOf("Матч",Long.MAX_VALUE.toString(),"0")).use{c->
+            buildString{while(c.moveToNext())append(c.getString(3))}
+        }
+        assertTrue(plan,plan.contains("COVERING INDEX guide_programme_title_search"))
     }}
     @Test fun recentSearchesPersistWithThirtyUniqueQueriesAndRemoval() {
         val context=androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext

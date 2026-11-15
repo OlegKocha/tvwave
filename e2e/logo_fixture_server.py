@@ -27,5 +27,5 @@ class Handler(BaseHTTPRequestHandler):
   except (BrokenPipeError,ConnectionResetError):pass
  def log_message(self,*args):pass
 if __name__=='__main__':
- print('Logo fixtures on 127.0.0.1:8767',flush=True)
- ThreadingHTTPServer(('127.0.0.1',8767),Handler).serve_forever()
+ print('Logo fixtures on 127.0.0.1:8777',flush=True)
+ ThreadingHTTPServer(('127.0.0.1',8777),Handler).serve_forever()

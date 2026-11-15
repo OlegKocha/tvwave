@@ -1,0 +1,21 @@
+appId: tv.tvwave.app.debug
+---
+- runFlow: open.yaml
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: playlist-edit
+    focused: true
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: playlist-refresh
+    focused: true
+- pressKey: Remote Dpad Center
+- extendedWaitUntil:
+    visible: "${EXPECTED_STATUS}"
+    timeout: 20000
+- assertVisible:
+    id: playlist-refresh
+    enabled: true
+- takeScreenshot: refresh-result
