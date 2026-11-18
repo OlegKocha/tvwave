@@ -1,0 +1,85 @@
+appId: tv.tvwave.app.debug
+---
+- launchApp
+- assertVisible:
+    id: guide-brand
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Left
+- pressKey: Remote Dpad Left
+- pressKey: Remote Dpad Up
+- assertVisible:
+    id: main-search
+    focused: true
+- pressKey: Remote Dpad Center
+- pressKey: Remote Dpad Center
+- inputText: Marathon
+- assertNotVisible:
+    id: search-programmes-heading
+- pressKey: Enter
+- assertVisible: "Передачи · показано 200"
+- assertVisible:
+    id: search-detail-title
+    text: Marathon final
+# Select the 200th broadcast, then move onto the button with the remote.
+- scrollUntilVisible:
+    element:
+      id: search-more
+    direction: DOWN
+    timeout: 180000
+    speed: 90
+- tapOn: Marathon 204
+- assertVisible:
+    id: details-title
+    text: Marathon 204
+- pressKey: back
+- assertVisible:
+    id: search-detail-title
+    text: Marathon 204
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: search-more
+    focused: true
+- assertVisible: Продолжить поиск дальше
+- assertVisible: "Передачи · показано 200"
+- pressKey: Remote Dpad Center
+- assertVisible: "Передачи · показано 400"
+- assertVisible:
+    id: search-detail-title
+    text: Marathon 203
+- pressKey: Remote Dpad Up
+- assertVisible:
+    id: search-detail-title
+    text: Marathon 204
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: search-detail-title
+    text: Marathon 203
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: details-title
+    text: Marathon 203
+- pressKey: back
+- assertVisible:
+    id: search-detail-title
+    text: Marathon 203
+- scrollUntilVisible:
+    element:
+      id: search-more
+    direction: DOWN
+    timeout: 180000
+    speed: 90
+- tapOn:
+    id: search-more
+- assertVisible: "Передачи · показано 403"
+- assertVisible:
+    id: search-detail-title
+    text: Marathon 003
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: search-detail-title
+    text: Marathon 001
+- assertVisible: "Больше совпадений нет"
+- assertNotVisible:
+    id: search-more
+- takeScreenshot: search-403-results

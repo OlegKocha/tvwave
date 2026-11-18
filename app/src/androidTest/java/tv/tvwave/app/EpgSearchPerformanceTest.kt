@@ -49,8 +49,8 @@ class EpgSearchPerformanceTest {
                     val start = SystemClock.elapsedRealtime()
                     val result = EpgSearch.find(db, state, "бильярд", now)
                     val elapsed = SystemClock.elapsedRealtime() - start
-                    Log.i("EpgSearchBenchmark", "run=$run rows=700000 bytes=${file.length()} elapsedMs=$elapsed matches=${result.programmeCount}")
-                    assertEquals(35, result.programmeCount)
+                    Log.i("EpgSearchBenchmark", "run=$run rows=700000 bytes=${file.length()} elapsedMs=$elapsed matches=${result.programmes.size}")
+                    assertEquals(35, result.programmes.size)
                     assertTrue(result.programmes.all { it.programme.description.isEmpty() })
                     assertTrue("Search took ${elapsed}ms", elapsed < 10000)
                 }

@@ -17,7 +17,7 @@ import javax.crypto.spec.GCMParameterSpec
 
 /** Encrypted configuration plus a small encrypted viewing snapshot; full saves replace both atomically.
  * Keystore never participates in portable backup encryption. All calls run off UI thread. */
-class Repository(context: Context) : SQLiteOpenHelper(context,"tvwave.db",null,10) {
+class Repository(context: Context) : SQLiteOpenHelper(context,"tvwave.db",null,11) {
     override fun onCreate(db: SQLiteDatabase) { db.execSQL("CREATE TABLE state (id INTEGER PRIMARY KEY, payload BLOB NOT NULL)");EpgCache.create(db);CacheMaintenance.create(db);createViewing(db) }
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) { EpgCache.migrate(db);CacheMaintenance.create(db);createViewing(db);if(oldVersion<4)db.execSQL("UPDATE guide_meta SET updated=0") }
     private val schedules=ScheduleMemoryCache()

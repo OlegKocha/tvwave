@@ -1,0 +1,27 @@
+appId: tv.tvwave.app.debug
+---
+- launchApp
+- assertVisible:
+    id: guide-brand
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Up
+- assertVisible:
+    id: guide-programme-title
+    text: Live now
+- pressKey: Remote Dpad Right
+- pressKey: Remote Dpad Right
+- assertVisible:
+    id: guide-programme-title
+    text: Week seven
+- pressKey: Remote Dpad Right
+- assertVisible:
+    id: guide-programme-title
+    text: Marathon final
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: details-title
+    text: Marathon final
+- assertVisible:
+    id: details-description
+    text: Marathon final details
+- takeScreenshot: guide-at-21-days

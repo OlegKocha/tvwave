@@ -42,10 +42,16 @@ class EpgSettingsTest {
         Repository(ctx).use{repo->
             val s=repo.load();val statuses=s.sources.associate{it.name to EpgCache.status(repo.readableDatabase,it)}
             // Rich seeded sources have 1536 programmes; only EPG 01 receives the 16-programme HTTP fixture.
-            assertEquals(16,statuses.getValue("EPG 01").programmes)
+            val refreshed=s.sources.first()
+            val newCount=repo.readableDatabase.rawQuery(
+                "SELECT COUNT(*) FROM guide_programme WHERE source=? AND title LIKE ?",
+                arrayOf(refreshed.id,"Тестовая передача %")).use{it.moveToFirst();it.getInt(0)}
+            assertEquals(16,newCount)
+            assertTrue(statuses.getValue("EPG 01").programmes in 17 until 1536)
+            assertEquals(statuses.getValue("EPG 02").until,statuses.getValue("EPG 01").until)
             assertEquals(1536,statuses.getValue("EPG 02").programmes)
             assertEquals(1536,statuses.getValue("EPG 03").programmes)
-            assertFalse(statuses.getValue("EPG 01").tomorrow)
+            assertTrue(statuses.getValue("EPG 01").tomorrow)
             assertTrue(statuses.getValue("EPG 02").tomorrow)
         }
     }

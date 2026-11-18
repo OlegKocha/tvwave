@@ -12,7 +12,8 @@ appId: tv.tvwave.app.debug
     focused: true
 - pressKey: Remote Dpad Center
 - extendedWaitUntil:
-    visible: '.*Успешно обновлена.*16 передач.*'
+    notVisible: '.*Успешно обновлена.*1536 передач.*'
     timeout: 20000
-- assertVisible: 'В источнике нет передач на завтра'
+- assertVisible: '.*Успешно обновлена.*передач.*'
+- assertVisible: 'В источнике есть передачи на завтра'
 - takeScreenshot: source-refreshed

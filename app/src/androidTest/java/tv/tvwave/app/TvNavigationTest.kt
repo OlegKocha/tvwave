@@ -99,6 +99,17 @@ class TvNavigationTest {
         val args=InstrumentationRegistry.getArguments()
         TvFixture.seed(args.getString("sources","1").toInt(),args.getString("large","false").toBoolean(),args.getString("font",if(args.getString("large","false")=="true")"120"else"100").toInt(),args.getString("rich","false").toBoolean(),args.getString("media","http://10.0.2.2:8765/video.mp4"),timeshift=args.getString("timeshift","true").toBoolean())
     }
+    @Test fun seedFullGuideForMaestro(){
+        val address=InstrumentationRegistry.getArguments().getString("epgUrl")
+        org.junit.Assume.assumeNotNull(address)
+        require(java.net.URI(address).host=="10.0.2.2")
+        TvFixture.seed()
+        Repository(ctx).use { repo ->
+            val state=repo.load()
+            repo.save(state.copy(epgSources=listOf(state.sources.single().copy(url=requireNotNull(address))),
+                epgAutoUpdate=false))
+        }
+    }
     @Test fun stageImportForMaestro(){
         check(ctx.packageName=="tv.tvwave.app.debug")
         check(android.os.Build.FINGERPRINT.contains("generic") || android.os.Build.MODEL.contains("sdk"))

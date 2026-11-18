@@ -1206,7 +1206,7 @@ class MainActivity : ComponentActivity() {
         LazyColumn(Modifier.weight(1f).padding(T.focusGap),state=scroll,verticalArrangement=Arrangement.spacedBy(T.tiny)){
             itemsIndexed(catalog,key={_,entry->entry.id}){i,entry->Setting(entry.names.firstOrNull()?:entry.id,"catalog:${entry.id}",if(data.epgBindings[matchTarget]==EpgBinding(matchSource,entry.id))"✓"else"",modifier=if(i==0)Modifier.focusRequester(first).focusProperties{up=search}else Modifier,subtitle=entry.id){work{
                 change{it.copy(epgBindings=it.epgBindings+(matchTarget to EpgBinding(matchSource,entry.id)))}
-                val hasSchedule=withContext(Dispatchers.IO){repository.schedule(matchTarget,EpgRetention.cutoff(System.currentTimeMillis()),System.currentTimeMillis()+3*86400000L,1).isNotEmpty()}
+                val hasSchedule=withContext(Dispatchers.IO){EpgCache.hasSchedule(repository.readableDatabase, matchTarget, EpgRetention.cutoff(System.currentTimeMillis()), data.epgOffsets[matchTarget] ?: 0)}
                 if(!hasSchedule)updateEpg(data.sources.filter{it.id==matchSource})
                 epgRevision++;returnTo("epgMatchChannels")
             }}}
@@ -1346,7 +1346,7 @@ class MainActivity : ComponentActivity() {
             }
         }
         LaunchedEffect(matchSource,epgRevision){matchCatalog=if(matchSource.isEmpty())emptyList()else withContext(Dispatchers.IO){EpgCache.catalog(repository.readableDatabase,matchSource)}}
-        LaunchedEffect(loaded,data.sources,data.epgBindings,data.epgOffsets,data.playlistEpgSources,epgRevision,selectedChannel,group,query,nowTime/60000,guideTime/3600000,playing?.id,visibleGuideRows){
+        LaunchedEffect(loaded,data.sources,data.epgBindings,data.epgOffsets,data.playlistEpgSources,epgRevision,selectedChannel,group,query,nowTime/60000,guideTime,playing?.id,visibleGuideRows){
             if(loaded){
                 val list=filtered();val index=list.indexOfFirst{it.id==selectedChannel}.coerceAtLeast(0)
                 val around=maxOf(6,visibleGuideRows)
@@ -1355,13 +1355,15 @@ class MainActivity : ComponentActivity() {
                 epgRows=withContext(Dispatchers.IO){
                     if(data.sources.isEmpty())emptyMap()
                     else ids.associateWith{id->
-                        if(id==selectedChannel)repository.schedule(id,from,nowTime+3*86400000L,10000,data.epgOffsets[id]?:0)
-                        else {
-                            val pivot=guideTime.takeIf{it>0}?:nowTime
-                            val window=repository.schedule(id,maxOf(from,pivot-3600000L),pivot+4*3600000L,300,data.epgOffsets[id]?:0)
-                            val live=if(id==playing?.id&&kotlin.math.abs(pivot-nowTime)>3600000L)repository.schedule(id,nowTime-3600000L,nowTime+4*3600000L,300,data.epgOffsets[id]?:0)else emptyList()
+                        val pivot=guideTime.takeIf{it>0}?:nowTime
+                        val offset=data.epgOffsets[id]?:0
+                        val window=if(id==selectedChannel)
+                            EpgCache.guideWindow(repository.readableDatabase,id,from,pivot,offset)
+                        else repository.schedule(id,maxOf(from,pivot-3600000L),pivot+4*3600000L,300,offset)
+                        if(id==playing?.id && kotlin.math.abs(pivot-nowTime)>3600000L){
+                            val live=repository.schedule(id,nowTime-3600000L,nowTime+4*3600000L,300,offset)
                             (window+live).distinctBy{it.start}.sortedBy{it.start}
-                        }
+                        }else window
                     }
                 }
             }
@@ -1724,24 +1726,44 @@ class MainActivity : ComponentActivity() {
         var failure by remember{mutableStateOf("")}
         var preview by remember{mutableStateOf<Pair<Channel,Programme?>?>(null)}
         var detail by remember{mutableStateOf<Programme?>(null)}
-        LaunchedEffect(guideSearch.submittedQuery,guideSearch.searchRevision,epgRevision,data.playlists,data.sources,data.epgBindings,data.playlistEpgSources,data.epgOffsets){
-            val term=guideSearch.submittedQuery;failure=""
-            val searchStarted=android.os.SystemClock.elapsedRealtime()
-            val searchRequest=guideSearch.searchRevision
-            android.util.Log.i("TVWaveSearch","start request=$searchRequest length=${term.length} channels=${data.channels.size}")
-            if(term.isEmpty()){guideSearch.results=GuideSearchResults();guideSearch.completedQuery=term;searching=false;return@LaunchedEffect}
+        val dataset=listOf(epgRevision,data.playlists,data.sources,data.epgBindings,data.playlistEpgSources,data.epgOffsets)
+        LaunchedEffect(guideSearch.searchRevision,dataset){
+            failure=""
+            searching=false
+            if(guideSearch.dataset!=dataset){
+                guideSearch.resetResults()
+                guideSearch.dataset=dataset
+            }
+            val term=guideSearch.submittedQuery
+            val after=guideSearch.appendAfter
+            if(term.isEmpty() || (guideSearch.initialComplete && after==null))return@LaunchedEffect
             searching=true
             try{
-                val snapshot=data;val time=nowTime
-                // Channel names are available immediately, even while the guide is searched.
-                val channels=withContext(Dispatchers.Default){EpgSearch.findChannels(snapshot,term)}
-                guideSearch.results=GuideSearchResults(channels=channels)
-                guideSearch.completedQuery=term
-                val result=withContext(Dispatchers.IO){val job=currentCoroutineContext();EpgSearch.find(repository.readableDatabase,snapshot,term,time){job.ensureActive()}}
-                android.util.Log.i("TVWaveSearch","complete request=$searchRequest channels=${result.channels.size} programmes=${result.programmes.size} elapsedMs=${android.os.SystemClock.elapsedRealtime()-searchStarted}")
-                guideSearch.results=result;guideSearch.completedQuery=term
-            }catch(e:CancellationException){android.util.Log.i("TVWaveSearch","cancel request=$searchRequest elapsedMs=${android.os.SystemClock.elapsedRealtime()-searchStarted}");throw e}
-            catch(e:Exception){android.util.Log.w("TVWaveSearch","failed request=$searchRequest type=${e.javaClass.simpleName}");failure=tr("search_failed")}
+                val snapshot=data
+                val time=guideSearch.searchTime
+                if(after==null){
+                    val channels=withContext(Dispatchers.Default){EpgSearch.findChannels(snapshot,term)}
+                    guideSearch.results=GuideSearchResults(channels=channels)
+                }
+                val page=withContext(Dispatchers.IO){
+                    val job=currentCoroutineContext()
+                    EpgSearch.find(repository.readableDatabase,snapshot,term,time,after){job.ensureActive()}
+                }
+                if(after==null){
+                    guideSearch.results=page
+                    guideSearch.initialComplete=true
+                }else{
+                    val current=guideSearch.results
+                    guideSearch.results=current.copy(programmes=current.programmes+page.programmes,hasNextPage=page.hasNextPage)
+                    guideSearch.selectedKey=page.programmes.firstOrNull()?.key ?: after.key
+                    guideSearch.finishAppend()
+                }
+            }catch(e:CancellationException){throw e}
+            catch(e:Exception){
+                android.util.Log.w("TVWaveSearch","Search failed",e)
+                guideSearch.finishAppend()
+                failure=tr("search_failed")
+            }
             finally{if(currentCoroutineContext().isActive)searching=false}
         }
         LaunchedEffect(preview,epgRevision,data.epgOffsets){

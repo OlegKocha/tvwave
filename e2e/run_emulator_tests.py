@@ -32,6 +32,9 @@ if args.mode in ['native','all']:
 if args.mode in ['maestro','all']:
  for flow,count in [('epg-roundtrip',10),('epg-interval',1),('epg-edit-cancel',1),('backup-export',1),('import-playlist',1),('import-playlist-direct',1),('player',1),('appearance',1),('search',1),('reminder-settings',1)]:
   if args.flow and flow not in args.flow:continue
+  # The export regression starts with file access granted to this specific app.
+  if flow=='backup-export':
+   subprocess.run(adb+['shell','appops','set','tv.tvwave.app.debug','MANAGE_EXTERNAL_STORAGE','allow'],check=True)
   ok,_=instrument('seedForMaestro',count,name='seed-'+flow)
   if not ok:raise RuntimeError('Fixture setup failed')
   cmd=['python3',str(workspace/'work/qa-emulator/maestro.py'),'test','--device',args.device,'--format','JUNIT','--output',str(out/(flow+'.xml')),'--test-output-dir',str(out/flow),'-e','CYCLES='+str(args.cycles),str(project/'e2e/maestro'/(flow+'.yaml'))]

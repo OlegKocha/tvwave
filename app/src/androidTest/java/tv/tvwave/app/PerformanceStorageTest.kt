@@ -63,7 +63,7 @@ class PerformanceStorageTest {
             db.execSQL("DROP TABLE viewing_state");db.execSQL("DROP TABLE guide_summary");db.version=6
         }
         Repository(ctx).use{repo->
-            assertEquals(old,repo.load());assertEquals(10,repo.readableDatabase.version)
+            assertEquals(old,repo.load());assertEquals(11,repo.readableDatabase.version)
             assertTrue(EpgCache.status(repo.readableDatabase,old.sources[0]).programmes>0)
             val next=old.copy(last=old.channels[4].id,history=listOf(old.channels[4].id)+old.history)
             repo.saveViewing(next.last,next.history.distinct())
@@ -107,18 +107,21 @@ class PerformanceStorageTest {
             val stage=File(ctx.cacheDir,"performance-stage.db")
             val fmt=java.text.SimpleDateFormat("yyyyMMddHHmmss Z",java.util.Locale.ROOT)
             val xml="<tv><channel id=\"test1\"><display-name>One</display-name></channel><programme channel=\"test1\" start=\"${fmt.format(java.util.Date(now-3600000))}\" stop=\"${fmt.format(java.util.Date(now+3600000))}\"><title>Updated</title><desc>Complete new description</desc></programme></tv>"
+            val start=(now-3600000)/1000*1000
+            val end=(now+3600000)/1000*1000
+            val merged=original.filter{it.end<=start}.map{it.title}+"Updated"+original.filter{it.start>=end}.map{it.title}
             try{
                 EpgCache.stage(stage,xml.byteInputStream(),state.channels,state.sources[0],now,{})
                 repo.installEpg(stage,state.sources[0],state)
-                assertEquals("Updated",check().single().title)
-                assertEquals(1,EpgCache.status(repo.readableDatabase,state.sources[0]).programmes)
+                assertEquals(merged,check().map{it.title})
+                assertEquals(check().size,EpgCache.status(repo.readableDatabase,state.sources[0]).programmes)
             }finally{SQLiteDatabase.deleteDatabase(stage)}
             state=state.copy(epgBindings=mapOf(channel to EpgBinding(state.sources[1].id,"test1")));repo.save(state)
             assertEquals(original,check());check(90);check(-30)
             // Removing an active source and then restoring must invalidate both caches.
             state=state.copy(epgSources=listOf(state.sources[0]),epgBindings=emptyMap());repo.save(state)
-            assertEquals("Updated",check().single().title)
-            repo.maintain(state,now+EpgRetention.WEEK_MS)
+            assertEquals(merged,check().map{it.title})
+            repo.maintain(state,now+2*EpgRetention.WEEK_MS)
             assertTrue(check().isEmpty())
             assertEquals(0,EpgCache.status(repo.readableDatabase,state.sources[0]).programmes)
             repo.save(state,resetCache=true);assertTrue(check().isEmpty())

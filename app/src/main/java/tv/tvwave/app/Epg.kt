@@ -41,11 +41,13 @@ object Epg {
         val ids=guide.map{it.id}.toSet()
         val exact=mutableMapOf<String,MutableSet<String>>();val quality=mutableMapOf<String,MutableSet<String>>()
         for(c in guide)for(n in c.names){exact.getOrPut(name(n)){mutableSetOf()}.add(c.id);quality.getOrPut(base(n)){mutableSetOf()}.add(c.id)}
+        val variants by lazy(LazyThreadSafetyMode.NONE) { EpgNameVariants(guide) }
         return channels.mapNotNull{c->
             val names=listOf(c.epgName,c.name).filter{it.isNotBlank()}
             val id=c.epgId.takeIf{it.isNotEmpty()&&it in ids}
                 ?: names.firstNotNullOfOrNull{exact[name(it)]?.singleOrNull()}
                 ?: names.firstNotNullOfOrNull{quality[base(it)]?.singleOrNull()}
+                ?: variants.match(c.name)
             id?.let{c.id to it}
         }.toMap()
     }
@@ -88,7 +90,7 @@ object Epg {
                 if(q=="channel"){if(channelId.isNotBlank())definitions.add(EpgChannel(channelId,aliases.toList(),channelIcon));channelId="";if(definitions.size>20000)throw UserError(tr("too_many_channels_in_the_epg"))}
                 if(q=="programme"){
                     val s=start;val e=end
-                    if(pid in wanted&&s!=null&&s<=now+3*86400000L&&(e?:s+86400000L)>oldest&&(e==null||e>s)&&title.isNotBlank()){
+                    if(pid in wanted&&s!=null&&(e?:s+86400000L)>oldest&&(e==null||e>s)&&title.isNotBlank()){
                         if(++rows>MAX_PROGRAMMES)throw UserError(tr("too_many_programmes_in_the_epg_cache"))
                         onProgramme(Programme(pid,s,e?:0,title,desc))
                     }

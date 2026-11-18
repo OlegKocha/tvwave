@@ -11,13 +11,14 @@ object EpgCache {
         db.execSQL("CREATE TABLE IF NOT EXISTS guide_catalog (source TEXT, epg TEXT, name TEXT, aliases TEXT, icon TEXT NOT NULL DEFAULT '', PRIMARY KEY(source,epg))")
         db.execSQL("CREATE TABLE IF NOT EXISTS guide_programme (source TEXT, epg TEXT, start INTEGER, end INTEGER, title TEXT, description TEXT, PRIMARY KEY(source,epg,start))")
         // Search reads titles without touching the much larger description pages.
-        db.execSQL("CREATE INDEX IF NOT EXISTS guide_programme_title_search ON guide_programme(title,source,epg,start,end)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS guide_programme_by_time ON guide_programme(start DESC,source,epg,end,title)")
         db.execSQL("CREATE TABLE IF NOT EXISTS guide_meta (source TEXT PRIMARY KEY,url TEXT,updated INTEGER)")
         db.execSQL("CREATE TABLE IF NOT EXISTS guide_link (channel TEXT PRIMARY KEY,source TEXT,epg TEXT)")
         db.execSQL("CREATE TABLE IF NOT EXISTS guide_summary (source TEXT PRIMARY KEY, catalog_count INTEGER, programmes INTEGER, until_time INTEGER, day_start INTEGER, day_end INTEGER, tomorrow INTEGER)")
     }
     fun migrate(db:SQLiteDatabase){
         db.execSQL("DROP INDEX IF EXISTS guide_programme_search")
+        db.execSQL("DROP INDEX IF EXISTS guide_programme_title_search")
         create(db)
         val hasIcon=db.rawQuery("PRAGMA table_info(guide_catalog)",null).use{c->var found=false;while(c.moveToNext())if(c.getString(1)=="icon")found=true;found}
         if(!hasIcon)db.execSQL("ALTER TABLE guide_catalog ADD COLUMN icon TEXT NOT NULL DEFAULT ''")
@@ -49,17 +50,58 @@ object EpgCache {
             val count=db.rawQuery("SELECT COUNT(*) FROM guide_programme",null).use{it.moveToFirst();it.getInt(0)}
             if(count==0&&result.programmes>0)throw UserError(tr("no_programmes_with_a_known_end_time_in_xmltv"))
             db.execSQL("INSERT INTO guide_meta VALUES (?,?,?)",arrayOf<Any>(source.id,source.url,now))
-            updateSummary(db,source.id,tomorrowWindow(now))
             db.setTransactionSuccessful();return result.copy(programmes=count)
         }finally{if(db.inTransaction())db.endTransaction();db.close()}
     }
     fun remove(db:SQLiteDatabase,source:String){for(t in listOf("guide_link","guide_catalog","guide_programme","guide_meta","guide_summary"))db.delete(t,"source=?",arrayOf(source))}
     fun install(db:SQLiteDatabase,file:File,source:EpgSource,state:AppState){
         db.execSQL("ATTACH DATABASE ? AS imported_epg",arrayOf(file.path))
-        try{db.beginTransaction();remove(db,source.id)
-            for(t in listOf("guide_catalog","guide_programme","guide_meta","guide_summary"))db.execSQL("INSERT INTO ${t} SELECT * FROM imported_epg.${t}")
-            rebind(db,state);db.setTransactionSuccessful()
-        }finally{if(db.inTransaction())db.endTransaction();db.execSQL("DETACH DATABASE imported_epg")}
+        try {
+            db.beginTransaction()
+            val sameFeed = lastUpdated(db, source) != 0L
+            val args = arrayOf(source.id)
+            db.delete("guide_catalog", "source=?", args)
+            db.execSQL("INSERT INTO guide_catalog SELECT * FROM imported_epg.guide_catalog")
+            if (sameFeed) {
+                val wanted = EpgLinks.needed(state, source.id, catalog(db, source.id))
+                replaceCoveredProgrammes(db, source.id, wanted)
+            } else {
+                db.delete("guide_programme", "source=?", args)
+            }
+            db.execSQL("INSERT INTO guide_programme SELECT * FROM imported_epg.guide_programme")
+            db.execSQL("INSERT OR REPLACE INTO guide_meta SELECT * FROM imported_epg.guide_meta")
+            db.delete("guide_link", "source=?", args)
+            rebind(db,state)
+            updateSummary(db, source.id, tomorrowWindow(lastUpdated(db, source)))
+            db.setTransactionSuccessful()
+        } finally {
+            if(db.inTransaction())db.endTransaction()
+            db.execSQL("DETACH DATABASE imported_epg")
+        }
+    }
+
+    private data class Coverage(val start:Long, val end:Long)
+
+    /** Replace the interval supplied for each channel, including omissions inside it. */
+    private fun replaceCoveredProgrammes(db:SQLiteDatabase, source:String, wanted:Set<String>) {
+        val args = arrayOf(source)
+        val coverage = db.rawQuery("""SELECT epg, MIN(start), MAX(end) FROM imported_epg.guide_programme
+            WHERE source=? GROUP BY epg""", args).use { cursor ->
+            buildMap { while(cursor.moveToNext())put(cursor.getString(0),Coverage(cursor.getLong(1),cursor.getLong(2))) }
+        }
+        val cached = db.rawQuery("SELECT DISTINCT epg FROM guide_programme WHERE source=?", args).use { cursor ->
+            buildList { while(cursor.moveToNext())add(cursor.getString(0)) }
+        }
+        for (epg in cached) {
+            val interval = coverage[epg]
+            if (epg !in wanted) {
+                db.delete("guide_programme", "source=? AND epg=?", arrayOf(source,epg))
+            } else if (interval != null) {
+                // A broadcast touching the boundary survives; one crossing it is superseded.
+                db.delete("guide_programme", "source=? AND epg=? AND start<? AND end>?",
+                    arrayOf(source,epg,interval.end.toString(),interval.start.toString()))
+            }
+        }
     }
     fun catalog(db:SQLiteDatabase,source:String):List<EpgChannel> = db.rawQuery("SELECT epg,aliases,icon FROM guide_catalog WHERE source=? ORDER BY name COLLATE NOCASE",arrayOf(source)).use{c->buildList{while(c.moveToNext()){val a=JSONArray(c.getString(1));add(EpgChannel(c.getString(0),(0 until a.length()).map{a.getString(it)},c.getString(2)))}}}
     fun logos(db:SQLiteDatabase):Map<String,String> = db.rawQuery("SELECT l.channel,c.icon FROM guide_link l JOIN guide_catalog c ON c.source=l.source AND c.epg=l.epg WHERE c.icon<>''",null).use{c->buildMap{while(c.moveToNext())put(c.getString(0),c.getString(1))}}
@@ -125,6 +167,29 @@ object EpgCache {
         for((id,url) in stored)if(state.sources.none{it.id==id&&it.url==url})remove(db,id)
         rebind(db,state)
     }
+    /** Load neighbours by broadcast order, so navigation can cross gaps of any length. */
+    fun guideWindow(db:SQLiteDatabase, channel:String, oldest:Long, pivot:Long, offsetMinutes:Int):List<Programme> {
+        val shift=offsetMinutes*60000L
+        val args=arrayOf(channel,(oldest-shift).toString(),(pivot-shift).toString())
+        val query="""SELECT p.epg,p.start,p.end,p.title,p.description
+            FROM guide_link m JOIN guide_programme p ON p.source=m.source AND p.epg=m.epg
+            WHERE m.channel=? AND p.end>? AND p.start"""
+        fun read(order:String)=db.rawQuery(query+order,args).use { cursor ->
+            buildList {
+                while(cursor.moveToNext())add(Programme(cursor.getString(0),cursor.getLong(1)+shift,
+                    cursor.getLong(2)+shift,cursor.getString(3),cursor.getString(4)))
+            }
+        }
+        val before=read("<=? ORDER BY p.start DESC LIMIT 128")
+        val after=read(">? ORDER BY p.start LIMIT 128")
+        return before.asReversed()+after
+    }
+
+    fun hasSchedule(db:SQLiteDatabase,channel:String,oldest:Long,offsetMinutes:Int):Boolean =
+        db.rawQuery("""SELECT 1 FROM guide_link m JOIN guide_programme p
+            ON p.source=m.source AND p.epg=m.epg WHERE m.channel=? AND p.end>? LIMIT 1""",
+            arrayOf(channel,(oldest-offsetMinutes*60000L).toString())).use { it.moveToFirst() }
+
     fun schedule(db:SQLiteDatabase,channel:String,from:Long,to:Long,limit:Int=300,offsetMinutes:Int=0):List<Programme> {
         val offset=offsetMinutes*60000L
         return db.rawQuery("SELECT p.epg,p.start,p.end,p.title,p.description FROM guide_programme p JOIN guide_link m ON p.source=m.source AND p.epg=m.epg WHERE m.channel=? AND p.end>? AND p.start<? ORDER BY p.start LIMIT ?",arrayOf(channel,(from-offset).toString(),(to-offset).toString(),limit.coerceIn(1,10000).toString())).use{c->buildList{while(c.moveToNext())add(Programme(c.getString(0),c.getLong(1)+offset,c.getLong(2)+offset,c.getString(3),c.getString(4)))}}

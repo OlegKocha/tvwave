@@ -30,6 +30,6 @@ class EpgRetentionTest {
             show("farFuture",now+4*86400000,now+5*86400000)+"</tv>"
         val saved=mutableListOf<Programme>()
         Epg.parse(xml.byteInputStream(),emptyList(),now,{saved.add(it)},includeUnmatched=true)
-        assertEquals(listOf("overlap","fiveDays","current"),saved.map{it.title})
+        assertEquals(listOf("overlap","fiveDays","current","farFuture"),saved.map{it.title})
     }
 }

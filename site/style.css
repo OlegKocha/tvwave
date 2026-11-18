@@ -66,3 +66,9 @@ html{scroll-padding-top:82px}.section,.gallery,.hero{scroll-margin-top:16px}.gal
  #faq summary{min-height:44px;padding:20px 0}
  #faq details p{margin-top:0;padding-bottom:20px}
 }
+
+/* Instructions without a screenshot keep the same reading order and columns. */
+.tutorial-text{align-items:start}
+.tutorial-text>ol{padding-top:20px}
+.tutorial{scroll-margin-top:92px}
+@media(max-width:950px){.tutorial-text>ol{padding-top:0}}

@@ -22,6 +22,62 @@ class EpgSelectionDeviceTest {
         finally{SQLiteDatabase.deleteDatabase(main);SQLiteDatabase.deleteDatabase(stage)}
     }
     private val xml="""<tv><channel id="one"><display-name>One</display-name></channel><channel id="other"><display-name>Other</display-name><icon src="https://example.invalid/logo.png"/></channel><programme channel="one" start="20261103110000 +0000" stop="20261103130000 +0000"><title>One programme</title></programme><programme channel="other" start="20261103110000 +0000" stop="20261103130000 +0000"><title>Other programme</title></programme></tv>"""
+    @Test fun fullPlaylistHorizonIsBrowsableAndSearchable()=fixture { db,stage ->
+        val laterDay="20261124"
+        val feed=xml.replace("</tv>", """
+            <programme channel="one" start="${laterDay}110000 +0000" stop="${laterDay}120000 +0000"><title>November final</title></programme>
+            <programme channel="other" start="${laterDay}130000 +0000" stop="${laterDay}140000 +0000"><title>Other final</title></programme>
+            </tv>""")
+        val adjusted=state.copy(epgOffsets=mapOf(c.id to 60))
+        EpgCache.stage(stage,feed.byteInputStream(),state.channels,a,now,{},state=adjusted)
+        EpgCache.install(db,stage,a,adjusted)
+        val oldest=EpgRetention.cutoff(now)
+        val final=EpgCache.guideWindow(db,c.id,oldest,now,60).last()
+        assertEquals("November final", final.title)
+        assertEquals(Epg.time("20261124120000 +0000"), final.start)
+        assertEquals(final, EpgCache.guideWindow(db,c.id,oldest,final.start,60).last())
+        assertTrue(EpgCache.hasSchedule(db,c.id,final.start,60))
+        val results=EpgSearch.find(db,adjusted,"final",now)
+        assertEquals(1, results.programmes.size)
+        assertEquals(final.start, results.programmes.single().programme.start)
+        assertEquals(2, EpgCache.status(db,a,now).programmes)
+    }
+
+    @Test fun shorterRefreshReplacesCorrectionsAndPreservesEachChannelsTail()=fixture { db,stage ->
+        val second=c.copy(id="local-two",name="Other")
+        val both=state.copy(playlists=listOf(state.playlists.single().copy(channels=listOf(c,second))))
+        val format=java.text.SimpleDateFormat("yyyyMMddHHmmss Z",java.util.Locale.ROOT)
+        fun show(channel:String, hour:Int, duration:Int, title:String):String {
+            fun time(h:Int)=format.format(java.util.Date(now+h*3600000L))
+            return """<programme channel="$channel" start="${time(hour)}" stop="${time(hour+duration)}"><title>$title</title></programme>"""
+        }
+        fun install(rows:String, source:EpgSource=a){
+            val input=xml.substringBefore("<programme")+rows+"</tv>"
+            val config=both.copy(epgSources=listOf(source))
+            EpgCache.stage(stage,input.byteInputStream(),config.channels,source,now,{},state=config)
+            EpgCache.install(db,stage,source,config)
+        }
+        fun titles(channel:String)=EpgCache.guideWindow(db,channel,now,now,0).map{it.title}
+        val original=(0 until 11).joinToString(""){show("one",it*24,24,"Old day ${it+1}")}
+        install(original+show("other",0,24,"Old second")+
+            show("other",24,24,"Second tail")+show("one",167,3,"Old overlap"))
+        val short=show("one",0,12,"Corrected first")+show("one",160,8,"Corrected last")+
+            show("other",1,23,"Corrected second")
+        repeat(2){install(short)}
+        val tail=(8..11).map{"Old day $it"}
+        assertEquals(listOf("Corrected first","Corrected last")+tail,titles(c.id))
+        assertEquals(listOf("Corrected second","Second tail"),titles(second.id))
+        assertEquals(tail.reversed(),EpgSearch.find(db,both,"Old",now).programmes.map{it.programme.title})
+        assertEquals(now+11*24*3600000L,EpgCache.status(db,a,now).until)
+        assertEquals(8,EpgCache.status(db,a,now).programmes)
+        install(show("one",240,24,"Updated day eleven"))
+        assertEquals(listOf("Corrected first","Corrected last")+tail.dropLast(1)+"Updated day eleven",titles(c.id))
+        assertEquals(listOf("Corrected second","Second tail"),titles(second.id))
+        assertEquals(tail.dropLast(1).reversed(),EpgSearch.find(db,both,"Old",now).programmes.map{it.programme.title})
+        install(short,a.copy(url="https://example.invalid/new.xml"))
+        assertEquals(listOf("Corrected second"),titles(second.id))
+    }
+
     @Test fun importFiltersSchedulesButManualReimportAndEmptySelectionKeepCatalogue()=fixture{db,stage->
         val initial=EpgCache.stage(stage,xml.byteInputStream(),state.channels,a,now,{},state=state)
         assertEquals(1,initial.programmes);EpgCache.install(db,stage,a,state)

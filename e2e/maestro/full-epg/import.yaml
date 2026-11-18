@@ -1,0 +1,21 @@
+appId: tv.tvwave.app.debug
+---
+# The seeded playlist uses test1/test2. Its EPG source serves fixture.py output.
+- runFlow: ../open-epg.yaml
+- repeat:
+    times: 10
+    while:
+      notVisible:
+        id: epg-update
+        focused: true
+    commands:
+      - pressKey: Remote Dpad Down
+- assertVisible:
+    id: epg-update
+    focused: true
+- pressKey: Remote Dpad Center
+- extendedWaitUntil:
+    visible: "(?s).*100%.*405 передач.*"
+    timeout: 30000
+- assertNotVisible:
+    id: epg-cancel

@@ -35,6 +35,31 @@ class EpgTest {
         assertTrue(Epg.match(listOf(channel.copy(name="Первый канал +2")),guide).isEmpty())
         assertTrue(Epg.match(listOf(channel),guide+EpgChannel("ambiguous",listOf("Первый канал HD"))).isEmpty())
     }
+    @Test fun technicalLabelsKeepCountryLocalityAndTimeshift() {
+        val guide = listOf(
+            EpgChannel("news-by", listOf("News HD")), EpgChannel("news-ua", listOf("News HD [UA]")),
+            EpgChannel("rbk", listOf("РБК")), EpgChannel("tvk", listOf("ТВК Красноярск")),
+            EpgChannel("one-plus4", listOf("Первый канал (+4)"))
+        )
+        fun find(label: String) = Epg.match(listOf(channel.copy(name=label)),guide)["local"]
+        assertEquals("news-by",find("News HD BY"))
+        assertEquals("news-ua",find("News HD UA orig"))
+        assertNull(find("News HD KZ"))
+        assertNull(find("News HDR"))
+        assertEquals("rbk",find("РБК HD 50"))
+        assertEquals("tvk",find("ТВК HD (Красноярск)"))
+        assertNull(find("ТВК HD (Омск)"))
+        assertNull(find("Первый канал +4 (Алтай)"))
+        assertNull(find("Первый канал +8"))
+    }
+    @Test fun verifiedSpellingRequiresTheSameStationAndCountry() {
+        val station=EpgChannel("minsk-tv",listOf("Яснае ТВ"))
+        fun find(label:String,catalog:List<EpgChannel>)=Epg.match(listOf(channel.copy(name=label)),catalog)["local"]
+        assertEquals("minsk-tv",find("Яснае HD BY",listOf(station)))
+        assertNull(find("Яснае HD UA",listOf(station)))
+        assertNull(find("Яснае HD BY",listOf(station.copy(names=listOf("Яснае ТВ","Яснае ТВ [UA]")))))
+        assertNull(find("Яснае HD BY",listOf(station.copy(names=listOf("Other station")))))
+    }
     @Test fun parsePlainAndGzipWithoutFetchingDtd(){
         for(gzip in listOf(false,true)){
             val raw=if(gzip)ByteArrayOutputStream().apply{GZIPOutputStream(this).use{it.write(xml.toByteArray())}}.toByteArray()else xml.toByteArray()
