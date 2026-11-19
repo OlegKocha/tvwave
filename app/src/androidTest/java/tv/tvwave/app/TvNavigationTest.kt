@@ -95,10 +95,58 @@ class TvNavigationTest {
         down("main-favourites");down("main-settings");device.pressDPadCenter();focus("playlists")
         down("epg");device.pressDPadCenter()
     }
+    @Test fun idleGuideDoesNotCreatePlayerAcrossBackgroundAndForeground() {
+        TvFixture.seed()
+        val field=MainActivity::class.java.getDeclaredField("player").apply{isAccessible=true}
+        androidx.test.core.app.ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            assertNotNull(freshNode(By.res("guide-brand")))
+            scenario.onActivity { assertNull(field.get(it)) }
+            scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+            scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+            assertNotNull(freshNode(By.res("guide-brand")))
+            scenario.onActivity { assertNull(field.get(it)) }
+            device.pressDPadDown()
+            device.pressDPadCenter()
+            assertNotNull(freshNode(By.textContains("Смотрим ·")))
+            scenario.onActivity { assertNotNull(field.get(it)) }
+        }
+    }
+
     @Test fun seedForMaestro(){
         val args=InstrumentationRegistry.getArguments()
         TvFixture.seed(args.getString("sources","1").toInt(),args.getString("large","false").toBoolean(),args.getString("font",if(args.getString("large","false")=="true")"120"else"100").toInt(),args.getString("rich","false").toBoolean(),args.getString("media","http://10.0.2.2:8765/video.mp4"),timeshift=args.getString("timeshift","true").toBoolean())
     }
+    @Test fun assignGuideFromUnmatchedRow() {
+        TvFixture.seed()
+        val target = Repository(ctx).use { repo ->
+            val state = repo.load()
+            val playlist = state.playlists.single()
+            val raw = playlist.raw.replaceFirst("#EXTM3U\n",
+                "#EXTM3U\n#EXTINF:-1,Местная версия\nhttp://10.0.2.2:8765/local.mp4\n")
+            val channels = M3u.parse(raw, playlist.id)
+            repo.save(state.copy(playlists = listOf(playlist.copy(raw = raw, channels = channels)),
+                last = channels.first().id, epgAutoUpdate = false))
+            channels.first().id to state.sources.single().id
+        }
+        ctx.startActivity(Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK))
+        val action = By.res("guide-assign:" + target.first)
+        assertNotNull(freshNode(action))
+        device.pressDPadDown()
+        device.pressDPadUp()
+        device.pressDPadRight()
+        device.pressDPadCenter()
+        val candidate = By.res("guide-candidate:" + target.second + ":test1")
+        assertNotNull(freshNode(candidate))
+        device.pressBack()
+        assertNotNull(freshNode(action))
+        device.pressDPadCenter()
+        requireNotNull(freshNode(candidate)).click()
+        assertNotNull(freshNode(By.res("guide-programme-title").text("Тестовая передача 1")))
+        Repository(ctx).use { repo ->
+            assertEquals(EpgBinding(target.second, "test1"), repo.load().epgBindings[target.first])
+        }
+    }
+
     @Test fun seedFullGuideForMaestro(){
         val address=InstrumentationRegistry.getArguments().getString("epgUrl")
         org.junit.Assume.assumeNotNull(address)

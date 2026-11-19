@@ -18,6 +18,97 @@ import java.net.ServerSocket
 import java.util.concurrent.atomic.AtomicBoolean
 
 class TimeshiftTest {
+    @Test fun longFirstSegmentCanPlayBeforeTheSeekableWindowIsPublished() {
+        val instrumentation=InstrumentationRegistry.getInstrumentation()
+        val ctx=instrumentation.targetContext
+        val root=File(ctx.cacheDir,"initial-segment-test")
+        val server=ServerSocket(0)
+        val scope=CoroutineScope(Dispatchers.IO+SupervisorJob())
+        val releaseTail=java.util.concurrent.CountDownLatch(1)
+        val prefixSent=java.util.concurrent.CountDownLatch(1)
+        val bytes=ByteArray(512*1024){(it%251).toByte()}
+        val playlist="#EXTM3U\n#EXT-X-TARGETDURATION:10\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:9.6,\nfirst.ts\n".toByteArray()
+        val serving=scope.launch {
+            while(isActive) {
+                val socket=try {server.accept()} catch(_:java.io.IOException){break}
+                launch {
+                    socket.use {
+                        val reader=it.getInputStream().bufferedReader()
+                        val segment=reader.readLine().contains("/first.ts")
+                        while(!reader.readLine().isNullOrEmpty()) {}
+                        val body=if(segment)bytes else playlist
+                        val output=it.getOutputStream()
+                        output.write("HTTP/1.1 200 OK\r\nContent-Length: ${body.size}\r\nConnection: close\r\n\r\n".toByteArray())
+                        if(segment){
+                            output.write(bytes,0,65536);output.flush();prefixSent.countDown()
+                            releaseTail.await(12,java.util.concurrent.TimeUnit.SECONDS)
+                            output.write(bytes,65536,bytes.size-65536)
+                        }else output.write(body)
+                    }
+                }
+            }
+        }
+        val ring=Timeshift(root,OkHttpClient(),scope)
+        val factory=ring.factory(DefaultDataSource.Factory(ctx))
+        val initial=factory.createDataSource()
+        try {
+            ring.start("http://127.0.0.1:${server.localPort}/live.m3u8",256,{}, {})
+            assertTrue(prefixSent.await(4,java.util.concurrent.TimeUnit.SECONDS))
+            val manifest=factory.createDataSource()
+            val doc=runBlocking{withTimeout(3000){runInterruptible(Dispatchers.IO){
+                try {manifest.open(DataSpec(ring.uri));val buf=ByteArray(2048);String(buf,0,manifest.read(buf,0,buf.size))} finally{manifest.close()}
+            }}}
+            assertTrue(doc.contains("0.media"))
+            assertFalse("A partial file must not be seekable history",ring.active)
+            val segmentUri=ring.uri.buildUpon().path("/0.media").build()
+            val offset=32768
+            assertEquals((bytes.size-offset).toLong(),initial.open(DataSpec.Builder().setUri(segmentUri).setPosition(offset.toLong()).build()))
+            val buffer=ByteArray(4096)
+            val count=initial.read(buffer,0,buffer.size)
+            assertTrue(count>0);assertArrayEquals(bytes.copyOfRange(offset,offset+count),buffer.copyOf(count))
+            releaseTail.countDown()
+            await("Complete segment becomes available for seeking",4000){ring.active}
+            var pos=offset+count
+            while(pos<bytes.size){
+                val n=initial.read(buffer,0,buffer.size);assertTrue(n>0)
+                assertArrayEquals(bytes.copyOfRange(pos,pos+n),buffer.copyOf(n));pos+=n
+            }
+            assertEquals(-1,initial.read(buffer,0,1))
+        }finally{
+            releaseTail.countDown();initial.close();ring.stop();server.close();serving.cancel();scope.cancel();root.deleteRecursively()
+        }
+    }
+
+    @Test fun replacingARecorderKeepsTheOtherActiveRecording() {
+        val ctx=InstrumentationRegistry.getInstrumentation().targetContext
+        val root=File(ctx.cacheDir,"handoff-ring-test")
+        val scope=CoroutineScope(Dispatchers.IO+SupervisorJob())
+        val first=Timeshift(root,OkHttpClient(),scope)
+        val url="http://10.0.2.2:8778/live.m3u8"
+        try {
+            first.start(url,256,{}, {})
+            await("First recorder ready"){first.active}
+            val second=Timeshift(root,OkHttpClient(),scope)
+            try {
+                second.start(url,256,{}, {})
+                await("Replacement recorder ready"){second.active}
+                // An overlapping activity can still read its file until it stops.
+                for(ring in listOf(first,second)){
+                    val source=ring.factory(DefaultDataSource.Factory(ctx)).createDataSource()
+                    try {assertTrue(source.open(DataSpec(ring.uri.buildUpon().path("/0.media").build()))>0)}
+                    finally {source.close()}
+                }
+                first.stop()
+                val source=second.factory(DefaultDataSource.Factory(ctx)).createDataSource()
+                try {
+                    assertTrue(source.open(DataSpec(second.uri.buildUpon().path("/0.media").build()))>0)
+                    assertEquals(1,source.read(ByteArray(1),0,1))
+                }finally{source.close()}
+                repeat(8){first.start(url,256,{}, {});first.stop()}
+            }finally{second.stop()}
+        }finally{first.stop();scope.cancel()}
+    }
+
     @Test fun localPlaylistWaitsForDelayedCaptureWithoutFatalStuckError(){
         val instrumentation=InstrumentationRegistry.getInstrumentation()
         val begin=SystemClock.elapsedRealtime()

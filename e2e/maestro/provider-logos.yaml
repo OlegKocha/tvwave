@@ -5,10 +5,16 @@ appId: tv.tvwave.app.debug
     visible:
       id: 'channel-logo:${C1}'
     timeout: 15000
+- assertVisible:
+    id: 'channel-letter:${C2}'
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Up
+- repeat:
+    times: 5
+    commands:
+      - pressKey: Remote Dpad Down
 - extendedWaitUntil:
     visible:
       id: 'channel-logo:${C6}'
     timeout: 15000
-- assertVisible:
-    id: 'channel-letter:${C2}'
 - takeScreenshot: real-provider-logos

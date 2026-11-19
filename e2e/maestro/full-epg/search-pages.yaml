@@ -20,14 +20,16 @@ appId: tv.tvwave.app.debug
 - assertVisible:
     id: search-detail-title
     text: Marathon final
-# Select the 200th broadcast, then move onto the button with the remote.
-- scrollUntilVisible:
-    element:
-      id: search-more
-    direction: DOWN
-    timeout: 180000
-    speed: 90
-- tapOn: Marathon 204
+# From the tabs the first Down selects row 1. The 200th selects the last
+# programme on this page. Use the TV remote to open it and return to it.
+- repeat:
+    times: 200
+    commands:
+      - pressKey: Remote Dpad Down
+- assertVisible:
+    id: search-detail-title
+    text: Marathon 204
+- pressKey: Remote Dpad Center
 - assertVisible:
     id: details-title
     text: Marathon 204
@@ -62,14 +64,15 @@ appId: tv.tvwave.app.debug
 - assertVisible:
     id: search-detail-title
     text: Marathon 203
-- scrollUntilVisible:
-    element:
-      id: search-more
-    direction: DOWN
-    timeout: 180000
-    speed: 90
-- tapOn:
+# Row 201 is selected after returning from its details. Move past row 400.
+- repeat:
+    times: 200
+    commands:
+      - pressKey: Remote Dpad Down
+- assertVisible:
     id: search-more
+    focused: true
+- pressKey: Remote Dpad Center
 - assertVisible: "Передачи · показано 403"
 - assertVisible:
     id: search-detail-title

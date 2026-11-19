@@ -17,6 +17,7 @@ import okhttp3.Request
 import java.io.*
 import java.text.SimpleDateFormat
 import java.util.*
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.math.ceil
 
@@ -31,6 +32,50 @@ class Timeshift(private val root:File, private val http:OkHttpClient, private va
     private var pendingBytes=0L
     @Volatile private var generation=0L
     private var folder:File?=null
+    @Volatile private var firstSegment=CountDownLatch(0)
+    // Only the initial clear segment may be read while it is downloading. The seekable
+    // window and its byte accounting continue to contain complete files exclusively.
+    private var initialTransfer:InitialTransfer?=null
+    private class InitialTransfer(val segment:Segment, val temp:File, val size:Long) {
+        private val progress=java.util.concurrent.locks.ReentrantLock()
+        private val changed=progress.newCondition()
+        private var written=0L
+        private var aborted=false
+
+        fun advance(bytes:Long) {
+            progress.lock()
+            try { written=bytes;changed.signalAll() } finally { progress.unlock() }
+        }
+        fun abort() {
+            progress.lock()
+            try { aborted=true;changed.signalAll() } finally { progress.unlock() }
+        }
+        fun open(position:Long):InputStream {
+            val file=try { FileInputStream(temp) } catch(_:FileNotFoundException) { FileInputStream(segment.files.single()) }
+            file.channel.position(position)
+            return object:InputStream(){
+                var offset=position
+                override fun read():Int { val b=ByteArray(1);return if(read(b,0,1)<0)-1 else b[0].toInt() and 255 }
+                override fun read(b:ByteArray,off:Int,len:Int):Int {
+                    if(len==0)return 0
+                    if(offset>=size)return -1
+                    progress.lock()
+                    val available=try {
+                        while(!aborted && written<=offset)changed.await()
+                        if(aborted)throw IOException("Initial segment cancelled")
+                        written-offset
+                    } catch(e:InterruptedException) {
+                        Thread.currentThread().interrupt();throw InterruptedIOException("Initial segment interrupted")
+                    } finally { progress.unlock() }
+                    val n=file.read(b,off,minOf(len.toLong(),available).toInt())
+                    if(n<0)throw EOFException("Incomplete initial segment")
+                    offset+=n;return n
+                }
+                override fun close()=file.close()
+            }
+        }
+    }
+    private var cachedManifest:ByteArray?=null
     private var used=0L
     private var targetDuration=1
     @Volatile var limitBytes=1024L*1024*1024
@@ -38,15 +83,36 @@ class Timeshift(private val root:File, private val http:OkHttpClient, private va
     val active get()=window.ready
     val uri get()=Uri.parse("tvwave-timeshift://$generation/index.m3u8")
 
-    init { root.deleteRecursively();root.mkdirs() }
+    private companion object {
+        // Activity recreation can briefly leave two recorders in the same cache root.
+        private val activeFolders=mutableSetOf<File>()
+        private fun deleteFiles(dir:File) {
+            // Segment, key and staging files are direct children; a cancelled download
+            // may already have unlinked its staging file.
+            dir.listFiles()?.forEach { it.delete() }
+            dir.delete()
+        }
+    }
+    init {
+        synchronized(activeFolders) {
+            root.mkdirs()
+            root.listFiles()?.filterNot { it in activeFolders }?.forEach(::deleteFiles)
+        }
+    }
     fun stop() {
-        generation++;job?.cancel();job=null;calls.forEach{it.cancel()};calls.clear()
-        synchronized(lock){segments.clear();used=0;pendingBytes=0;targetDuration=1;window=Window();folder?.deleteRecursively();folder=null}
+        generation++;firstSegment.countDown();job?.cancel();job=null;calls.forEach{it.cancel()};calls.clear()
+        synchronized(lock){initialTransfer?.abort();initialTransfer=null;segments.clear();cachedManifest=null;used=0;pendingBytes=0;targetDuration=1;window=Window();folder?.let{dir->synchronized(activeFolders){deleteFiles(dir)}};folder=null}
     }
     fun start(url:String,limitMb:Int,onReady:(Uri)->Unit,onUnavailable:()->Unit) {
-        stop();limitBytes=limitMb.toLong()*1024*1024
+        stop()
+        val gate=CountDownLatch(1)
+        firstSegment=gate
+        limitBytes=limitMb.toLong()*1024*1024
         val token=generation
-        val dir=File(root,token.toString()).apply{mkdirs()};synchronized(lock){folder=dir}
+        val dir=synchronized(activeFolders) {
+            File(root,UUID.randomUUID().toString()).also { it.mkdirs();activeFolders.add(it) }
+        }
+        synchronized(lock){folder=dir}
         job=scope.launch(Dispatchers.IO) {
             var ready=false;var ordinal=0L;var nextStart=0L
             try {
@@ -80,10 +146,11 @@ class Timeshift(private val root:File, private val http:OkHttpClient, private va
                                 evict(bytes+pendingBytes)
                                 require(used+bytes+pendingBytes<=limitBytes)
                                 segments.addLast(segment);used+=bytes
+                                if(segment.index==0L)initialTransfer=null
                                 targetDuration=maxOf(targetDuration,ceil(segment.duration/1000.0).toInt());publish()
                             }
                             lastProgress=System.nanoTime()
-                            if(!ready&&active){ready=true;withContext(Dispatchers.Main){if(token==generation)onReady(uri)}}
+                            if(!ready&&active){ready=true;gate.countDown();withContext(Dispatchers.Main){if(token==generation)onReady(uri)}}
                         }
                         val now=android.os.SystemClock.elapsedRealtime()
                         if(lastPoll==0L||now-lastPoll>= (media.targetDurationUs/2000).coerceIn(500,3000)){
@@ -96,7 +163,19 @@ class Timeshift(private val root:File, private val http:OkHttpClient, private va
                         }
                         val first=media.mediaSequence
                         require(scheduled==null||first<=scheduled!!+1){"HLS window gap"}
-                        val initial=if(scheduled==null)(media.segments.size-1).coerceAtLeast(0)else 0
+                        val last=media.segments.lastIndex
+                        // Start one segment behind the newest on short feeds and on clear TS
+                        // feeds that support progressive reads. The next segment can then be
+                        // recorded while the decoder plays the first one, even on a slow link.
+                        val previous=media.segments.getOrNull(last-1)
+                        val maxHeadroom=if(previous?.initializationSegment==null && previous?.fullSegmentEncryptionKeyUri==null &&
+                            previous?.byteRangeLength==C.LENGTH_UNSET.toLong())10_000_000L else 4_000_000L
+                        val initial=when {
+                            scheduled!=null -> 0
+                            previous!=null && previous.durationUs<=maxHeadroom && !previous.hasGapTag && previous.drmInitData==null &&
+                                previous.relativeDiscontinuitySequence==media.segments[last].relativeDiscontinuitySequence -> last-1
+                            else -> last
+                        }
                         for(i in initial until media.segments.size){
                             // Remember discovered URLs even when an older transfer is slow.
                             // Cap backlog at two minutes (and 120 descriptors for short segments).
@@ -116,7 +195,13 @@ class Timeshift(private val root:File, private val http:OkHttpClient, private va
                                         val name="$index.$suffix";val target=File(dir,name)
                                         var attempt=0
                                         while(true){
-                                            try{download(base,url,target,offset,length,token);break}
+                                            try{
+                                                val initial=if(index==0L && suffix=="media" && duration>4000 &&
+                                                    source.initializationSegment==null && source.fullSegmentEncryptionKeyUri==null &&
+                                                    length==C.LENGTH_UNSET.toLong() && attempt==0)
+                                                    Segment(index,start,duration,discontinuity,listOf(target),null,null,null) else null
+                                                download(base,url,target,offset,length,token,initial,gate);break
+                                            }
                                             catch(e:CancellationException){throw e}
                                             catch(e:Exception){ensureActive();check(token==generation);if(++attempt>=3)throw e;delay(attempt*500L)}
                                         }
@@ -133,7 +218,8 @@ class Timeshift(private val root:File, private val http:OkHttpClient, private va
                             }})
                         }
                         require(TimeUnit.NANOSECONDS.toSeconds(System.nanoTime()-lastProgress)<90){"Capture stalled"}
-                        delay(100)
+                        // Wake on the first completed segment instead of waiting for the next poll.
+                        if(!ready && pending.isNotEmpty())withTimeoutOrNull(100){pending.first().join()} else delay(100)
                     }
                 }
             }catch(e:CancellationException){throw e}
@@ -142,27 +228,35 @@ class Timeshift(private val root:File, private val http:OkHttpClient, private va
                 android.util.Log.w("TVWaveTimeshift","Capture unavailable: ${e.javaClass.simpleName} at ${e.stackTrace.firstOrNull{it.className.startsWith("tv.tvwave.app.Timeshift")}}")
                 withContext(Dispatchers.Main){if(token==generation){stop();onUnavailable()}}
             }
-            finally { if(token!=generation)dir.deleteRecursively() }
+        }
+        job?.invokeOnCompletion {
+            // Child transfers have finished. Remove any staging file created during
+            // cancellation before allowing another recorder to sweep this directory.
+            synchronized(activeFolders) { deleteFiles(dir);activeFolders.remove(dir) }
         }
     }
-    private fun publish(){window=if(segments.isEmpty())Window()else Window(segments.first.start,segments.last.start+segments.last.duration,used)}
+    private fun publish(){cachedManifest=null;window=if(segments.isEmpty())Window()else Window(segments.first.start,segments.last.start+segments.last.duration,used)}
     private fun evict(incoming:Long){
+        val previousSize=segments.size
         while(segments.isNotEmpty()&&(used+incoming>limitBytes||root.usableSpace<64L*1024*1024+incoming)){
             val old=segments.removeFirst();used-=old.files.sumOf{it.length()};old.files.forEach{it.delete()}
         }
-        publish()
+        if(previousSize!=segments.size)publish()
     }
-    private suspend fun download(base:String,relative:String,target:File,offset:Long,length:Long,token:Long){
+    private suspend fun download(base:String,relative:String,target:File,offset:Long,length:Long,token:Long,initial:Segment?,gate:CountDownLatch){
         val address=java.net.URI(base).resolve(relative).toString()
         val request=Request.Builder().url(address).header("User-Agent","TVWave/${BuildConfig.VERSION_NAME}")
         if(length!=C.LENGTH_UNSET.toLong())request.header("Range","bytes=$offset-${offset+length-1}")
         val c=http.newCall(request.build());calls.add(c)
         val temp=File(target.path+".part")
-        var reserved=0L;var complete=false
+        var reserved=0L;var complete=false;var transfer:InitialTransfer?=null
         try { c.execute().use{response->
             require(response.isSuccessful)
             if(length!=C.LENGTH_UNSET.toLong())require(response.code==206)
             val body=response.body?:error("Empty segment")
+            val expected=body.contentLength()
+            if(initial!=null && expected in (256L*1024)..minOf(limitBytes/4,64L*1024*1024))
+                transfer=InitialTransfer(initial,temp,expected)
             var total=0L;val started=System.nanoTime();var reading=0L;var storing=0L
             body.byteStream().use{input->temp.outputStream().use{out->
                 val bytes=ByteArray(64*1024)
@@ -172,13 +266,24 @@ class Timeshift(private val root:File, private val http:OkHttpClient, private va
                     val storeStart=System.nanoTime()
                     total+=n;require(total<=minOf(limitBytes/4,64L*1024*1024))
                     synchronized(lock){check(token==generation);evict(pendingBytes+n);require(used+pendingBytes+n<=limitBytes);require(root.usableSpace>32L*1024*1024+n);pendingBytes+=n;reserved+=n}
-                    out.write(bytes,0,n);storing+=System.nanoTime()-storeStart
+                    out.write(bytes,0,n)
+                    transfer?.let { t ->
+                        t.advance(total)
+                        if(total==n.toLong())synchronized(lock) {
+                            check(token==generation);initialTransfer=t;cachedManifest=null;gate.countDown()
+                        }
+                    }
+                    storing+=System.nanoTime()-storeStart
                 }
             }}
             if(BuildConfig.DEBUG)android.util.Log.d("TVWaveTimeshift","Segment bytes=$total totalMs=${(System.nanoTime()-started)/1000000} readMs=${reading/1000000} storeMs=${storing/1000000}")
-            require(total>0&&(length==C.LENGTH_UNSET.toLong()||total==length))
+            require(total>0&&(length==C.LENGTH_UNSET.toLong()||total==length)&&(transfer==null||total==expected))
             check(token==generation);require(temp.renameTo(target));complete=true
-        }}finally{temp.delete();calls.remove(c);if(!complete)synchronized(lock){if(token==generation)pendingBytes-=reserved}}
+        }}finally{temp.delete();calls.remove(c);if(!complete)synchronized(lock){
+            transfer?.abort()
+            if(transfer!=null && initialTransfer===transfer){initialTransfer=null;cachedManifest=null}
+            if(token==generation)pendingBytes-=reserved
+        }}
     }
     private fun loadPlaylist(url:String,token:Long):androidx.media3.exoplayer.hls.playlist.HlsPlaylist {
         check(token==generation)
@@ -195,20 +300,23 @@ class Timeshift(private val root:File, private val http:OkHttpClient, private va
         }}finally{calls.remove(c)}
     }
     private fun manifest():ByteArray=synchronized(lock){
-        if(segments.isEmpty())throw IOException("Timeshift empty")
+        cachedManifest?.let{return@synchronized it}
+        val entries:Collection<Segment> = if(segments.isNotEmpty())segments else listOf(initialTransfer?.segment?:throw IOException("Timeshift empty"))
+        val first=entries.first()
+        val duration=maxOf(targetDuration,ceil(first.duration/1000.0).toInt())
         val date=SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",Locale.US).apply{timeZone=TimeZone.getTimeZone("UTC")}
         buildString{
-            append("#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-TARGETDURATION:${targetDuration}\n")
-            append("#EXT-X-MEDIA-SEQUENCE:${segments.first.index}\n#EXT-X-DISCONTINUITY-SEQUENCE:${segments.first.discontinuity}\n")
-            var discontinuity=segments.first.discontinuity
-            segments.forEach{s->
+            append("#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-TARGETDURATION:${duration}\n")
+            append("#EXT-X-MEDIA-SEQUENCE:${first.index}\n#EXT-X-DISCONTINUITY-SEQUENCE:${first.discontinuity}\n")
+            var discontinuity=first.discontinuity
+            entries.forEach{s->
                 if(discontinuity!=s.discontinuity){append("#EXT-X-DISCONTINUITY\n");discontinuity=s.discontinuity}
                 append("#EXT-X-PROGRAM-DATE-TIME:${date.format(Date(s.start))}\n")
                 if(s.key!=null)append("#EXT-X-KEY:METHOD=AES-128,URI=\"${s.key}\",IV=${s.iv}\n")else append("#EXT-X-KEY:METHOD=NONE\n")
                 if(s.init!=null)append("#EXT-X-MAP:URI=\"${s.init}\"\n")
                 append("#EXTINF:${s.duration/1000.0},\n${s.index}.media\n")
             }
-        }.toByteArray()
+        }.toByteArray().also{cachedManifest=it}
     }
     fun factory(upstream:DataSource.Factory)=DataSource.Factory{object:BaseDataSource(false){
         private var delegate:DataSource?=null;private var input:InputStream?=null;private var address:Uri?=null;private var remaining=0L;private var started=false
@@ -216,18 +324,33 @@ class Timeshift(private val root:File, private val http:OkHttpClient, private va
             address=spec.uri
             if(spec.uri.scheme!="tvwave-timeshift")return upstream.createDataSource().also{delegate=it}.open(spec)
             transferInitializing(spec)
+            // Media3 can prepare as soon as tuning starts. Only its manifest loader waits
+            // for the recorder; stop() also wakes it when the channel changes or fails.
+            val gate=firstSegment
+            if(spec.uri.lastPathSegment=="index.m3u8" && spec.uri.host==generation.toString()){
+                try { gate.await() } catch(e:InterruptedException){
+                    Thread.currentThread().interrupt()
+                    throw InterruptedIOException("Timeshift load cancelled")
+                }
+            }
             synchronized(lock){
                 if(spec.uri.host!=generation.toString())throw IOException("Timeshift expired")
                 val name=spec.uri.lastPathSegment.orEmpty()
                 val size:Long
+                var offset=spec.position
                 if(name=="index.m3u8"){val bytes=manifest();input=bytes.inputStream();size=bytes.size.toLong()}
                 else{
                     if(!name.matches(Regex("[0-9]+\\.(media|init|key)")))throw IOException("Invalid segment")
                     val file=File(folder?:throw IOException("Timeshift closed"),name)
-                    input=file.inputStream();size=file.length()
+                    val transfer=initialTransfer?.takeIf{it.segment.files.single()==file}
+                    if(transfer!=null){
+                        size=transfer.size
+                        if(offset>size)throw IOException("Invalid range")
+                        input=transfer.open(offset);offset=0
+                    } else { input=file.inputStream();size=file.length() }
                 }
                 if(spec.position>size)throw IOException("Invalid range")
-                var skip=spec.position;while(skip>0){val n=input!!.skip(skip);if(n<=0)throw EOFException();skip-=n}
+                var skip=offset;while(skip>0){val n=input!!.skip(skip);if(n<=0)throw EOFException();skip-=n}
                 remaining=if(spec.length==C.LENGTH_UNSET.toLong())size-spec.position else minOf(spec.length,size-spec.position)
             }
             transferStarted(spec);started=true;return remaining

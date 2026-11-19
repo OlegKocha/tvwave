@@ -4,6 +4,12 @@ appId: tv.tvwave.app.debug
     id: file-access-dialog
 - tapOn:
     id: file-access-settings
+- repeat:
+    times: 10
+    while:
+      notVisible: "Not allowed"
+    commands:
+      - pressKey: Remote Dpad Down
 - tapOn: "Not allowed"
 - pressKey: back
 - extendedWaitUntil:

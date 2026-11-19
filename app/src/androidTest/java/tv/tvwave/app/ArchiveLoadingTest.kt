@@ -51,7 +51,11 @@ class ArchiveLoadingTest {
             Repository(ctx).use{it.save(AppState(uiLanguage="ru"),true)}
             ActivityScenario.launch(MainActivity::class.java).use{scenario->
                 visible("welcome-settings")
-                scenario.onActivity{MainActivity::class.java.getDeclaredField("http").apply{isAccessible=true}.set(it,client)}
+                scenario.onActivity { activity ->
+                    val delegate = MainActivity::class.java.getDeclaredField("http\$delegate")
+                    delegate.isAccessible = true
+                    delegate.set(activity, lazyOf(client))
+                }
                 fun start()=scenario.onActivity { a->
                     val now=System.currentTimeMillis()
                     MainActivity::class.java.getDeclaredMethod("startArchive",Channel::class.java,Programme::class.java,

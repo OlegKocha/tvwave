@@ -12,7 +12,7 @@ appId: tv.tvwave.app.debug
 - pressKey: Remote Dpad Center
 - assertVisible:
     id: player-position
-    text: "01:.*"
+    text: "00:0[5-9]"
 - pressKey: Remote Dpad Up
 - assertVisible:
     id: player-timeline
@@ -23,12 +23,12 @@ appId: tv.tvwave.app.debug
 - pressKey: Remote Dpad Right
 - assertVisible:
     id: player-position
-    text: "Перейти на 16:.*"
+    text: "Перейти на 15:0[5-9]"
 - takeScreenshot: archive-seek-preview
 - pressKey: back
 - assertVisible:
     id: player-position
-    text: "01:.*"
+    text: "00:0[5-9]"
 - pressKey: Remote Dpad Center
 - pressKey: Remote Dpad Right
 - pressKey: Remote Dpad Right
@@ -36,7 +36,7 @@ appId: tv.tvwave.app.debug
 - pressKey: Remote Dpad Center
 - assertVisible:
     id: player-position
-    text: "16:.*"
+    text: "15:0[5-9]"
 - assertNotVisible:
     id: channel-browser
 - pressKey: Remote Dpad Down

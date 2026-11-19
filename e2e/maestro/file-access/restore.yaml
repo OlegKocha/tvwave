@@ -3,6 +3,13 @@ appId: tv.tvwave.app.debug
 - launchApp:
     permissions:
       all: deny
+- runFlow:
+    when:
+      visible:
+        id: "language:ru"
+    commands:
+      - tapOn:
+          id: "language:ru"
 - assertVisible:
     id: restore
 - tapOn:

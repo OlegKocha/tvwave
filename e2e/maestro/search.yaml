@@ -25,21 +25,17 @@ appId: tv.tvwave.app.debug
     id: search-results
     focused: true
 - takeScreenshot: search-submitted
-# Query "1" matches eight channels (1, 10–16), followed by EPG programmes.
-- repeat:
-    times: 8
-    commands:
-      - pressKey: Remote Dpad Down
+# Switch from eight matching channels directly to the first programme.
+- pressKey: Remote Dpad Right
 - assertVisible:
     id: search-programmes-heading
+- pressKey: Remote Dpad Down
 - assertVisible:
     id: search-detail-title
     text: "Тестовая передача 1"
 - takeScreenshot: search-programme-result
-- repeat:
-    times: 8
-    commands:
-      - pressKey: Remote Dpad Up
+- pressKey: Remote Dpad Up
+- pressKey: Remote Dpad Left
 - assertVisible:
     id: search-channels-heading
 - pressKey: Remote Dpad Left

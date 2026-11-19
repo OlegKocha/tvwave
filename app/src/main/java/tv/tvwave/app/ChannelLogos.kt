@@ -22,21 +22,25 @@ class ChannelLogos(context:Context):AutoCloseable {
     private data class Entry(val bitmap:Bitmap?,val until:Long)
     private val memory=object:LruCache<String,Entry>(4*1024*1024){override fun sizeOf(key:String,value:Entry)=value.bitmap?.byteCount?:128}
     private val slots=Semaphore(4)
-    private val client=OkHttpClient.Builder().cache(Cache(File(context.cacheDir,"channel-logos"),20L*1024*1024))
+    private val clientDelegate = lazy { OkHttpClient.Builder().cache(Cache(File(context.cacheDir,"channel-logos"),20L*1024*1024))
         .connectTimeout(5,TimeUnit.SECONDS).readTimeout(5,TimeUnit.SECONDS).callTimeout(8,TimeUnit.SECONDS)
-        .addNetworkInterceptor{chain->val r=chain.proceed(chain.request());if(r.isSuccessful&&r.header("Cache-Control")==null)r.newBuilder().header("Cache-Control","max-age=86400").build()else r}.build()
+        .addNetworkInterceptor{chain->val r=chain.proceed(chain.request());if(r.isSuccessful&&r.header("Cache-Control")==null)r.newBuilder().header("Cache-Control","max-age=86400").build()else r}.build() }
+    private val client by clientDelegate
     suspend fun load(raw:String):Bitmap? {
         if(closed.get())return null
         val url=runCatching{SourceIO.url(raw)}.getOrNull()?:return null
         return slots.withPermit {
             if(closed.get())return@withPermit null
             memory.get(url)?.takeIf{it.until>SystemClock.elapsedRealtime()}?.let{return@withPermit it.bitmap}
-            val bitmap=download(url)
+            val bitmap=withContext(Dispatchers.IO) {
+                val activeClient=synchronized(closed) { if(closed.get()) null else client }
+                activeClient?.let { download(url,it) }
+            }
             if(!closed.get())memory.put(url,Entry(bitmap,SystemClock.elapsedRealtime()+if(bitmap==null)60000 else 900000))
             bitmap
         }
     }
-    private suspend fun download(url:String):Bitmap?=suspendCancellableCoroutine{continuation->
+    private suspend fun download(url:String,client:OkHttpClient):Bitmap?=suspendCancellableCoroutine{continuation->
         val call=client.newCall(Request.Builder().url(url).header("User-Agent","TVWave/${BuildConfig.VERSION_NAME}").build())
         continuation.invokeOnCancellation{call.cancel()}
         call.enqueue(object:Callback {
@@ -58,15 +62,18 @@ class ChannelLogos(context:Context):AutoCloseable {
         })
     }
     override fun close(){
-        if(!closed.compareAndSet(false,true))return
+        val activeClient=synchronized(closed){
+            if(!closed.compareAndSet(false,true))return
+            if(clientDelegate.isInitialized())client else null
+        }
         memory.evictAll()
         // Closing a TLS socket may write a close-notify packet. Keep network and disk
         // cleanup off the Activity thread, even after its lifecycle has ended.
         cleanup.launch {
             try {
-                client.dispatcher.cancelAll()
-                runCatching{client.cache?.close()}
-                runCatching{client.connectionPool.evictAll()}
+                activeClient?.dispatcher?.cancelAll()
+                runCatching{activeClient?.cache?.close()}
+                runCatching{activeClient?.connectionPool?.evictAll()}
                 memory.evictAll()
             }finally{cleanup.cancel()}
         }

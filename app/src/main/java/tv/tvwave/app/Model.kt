@@ -21,7 +21,7 @@ data class AppState(
     val resume: Boolean = false, val audioLanguage: String = "ru", val subtitles: Boolean = false, val epgUrl:String="", val epgAutoUpdate:Boolean=true, val epgBackup:String="", val epgSources:List<EpgSource> = emptyList(), val epgBindings:Map<String,EpgBinding> = emptyMap(), val epgIntervalHours:Int=24, val fontPercent:Int=if(large)120 else 100,
     val playlistEpgSources:Map<String,String> = emptyMap(), val epgOffsets:Map<String,Int> = emptyMap(), val uiLanguage:String="", val reminderMinutes:Set<Int> = setOf(5), val timeshiftEnabled:Boolean=true, val timeshiftMb:Int=1024
 ) {
-    val channels get() = playlists.flatMap { it.channels }
+    val channels: List<Channel> by lazy { playlists.flatMap { it.channels } }
     val sources get() = epgSources.ifEmpty{if(epgUrl.isNotEmpty())listOf(legacyEpgSource(epgUrl))else emptyList()}
 }
 object SourceIO {
@@ -59,6 +59,9 @@ object M3u {
         var name: String? = null; var group = BuiltinGroups.UNGROUPED; var tvgId = ""; var tvgName = ""; var archiveDays=0; var row = 1
         val channels = mutableListOf<Channel>(); val occurrences = mutableMapOf<String, Int>()
         val attribute = Regex("([\\w-]+)=\"([^\"]*)\"")
+        val header = Regex("^#EXTINF:-?\\d+(?:\\.\\d+)?(?:\\s|,)")
+        val digest = MessageDigest.getInstance("SHA-256")
+        val hex = "0123456789abcdef"
         for (raw in lines) {
             row++; val line = raw.trim(); if (line.isEmpty()) continue
             if (line.length > 65536) throw UserError(tr("line_is_too_long", row))
@@ -71,7 +74,7 @@ object M3u {
                         if (line[index] == '"') quoted = !quoted
                         line[index] == ',' && !quoted
                     } ?: throw UserError(tr("invalid_channel_description_at_line", row))
-                    if (!Regex("^#EXTINF:-?\\d+(?:\\.\\d+)?(?:\\s|,)").containsMatchIn(line)) throw UserError(tr("invalid_extinf_at_line", row))
+                    if (!header.containsMatchIn(line)) throw UserError(tr("invalid_extinf_at_line", row))
                     val attrs = attribute.findAll(line.substring(0, comma)).associate { it.groupValues[1] to it.groupValues[2] }
                     name = line.substring(comma + 1).trim().takeIf { it.isNotBlank() && it.length <= 512 }
                         ?: throw UserError(tr("invalid_channel_name_at_line", row))
@@ -86,7 +89,14 @@ object M3u {
                     val address = try { SourceIO.url(line, base) } catch (_: Exception) { throw UserError(tr("invalid_channel_url_at_line", row)) }
                     val identity = if (tvgId.isNotBlank()) "id:${tvgId}" else "${group}\u0000${title}"
                     val occurrence = (occurrences[identity] ?: 0); occurrences[identity] = occurrence + 1
-                    val hash = MessageDigest.getInstance("SHA-256").digest("${identity}\u0000${occurrence}".toByteArray()).joinToString("") { "%02x".format(it) }
+                    val bytes = digest.digest("${identity}\u0000${occurrence}".toByteArray())
+                    val hash = buildString(bytes.size * 2) {
+                        for (byte in bytes) {
+                            val value = byte.toInt() and 0xff
+                            append(hex[value ushr 4])
+                            append(hex[value and 15])
+                        }
+                    }
                     channels += Channel("${playlistId}:${hash}", title, group, address,tvgId,tvgName,archiveDays); name = null
                     if (channels.size > 50000) throw UserError(tr("the_playlist_has_more_than_50_000_channels"))
                 }

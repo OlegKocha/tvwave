@@ -6,8 +6,6 @@ appId: tv.tvwave.app.debug
     focused: true
 - pressKey: Remote Dpad Center
 - assertVisible: 'Это не M3U/M3U8.*'
-- assertNotVisible:
-    id: source-add
 - assertVisible:
     id: validate
     focused: true
@@ -16,6 +14,15 @@ appId: tv.tvwave.app.debug
 - assertVisible:
     id: source-phone
     focused: true
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: source-add
+    focused: true
 - pressKey: Remote Dpad Center
+- assertVisible: 'Это не M3U/M3U8.*'
+- assertNotVisible:
+    id: guide-brand
+- tapOn:
+    id: source-phone
 - assertVisible:
     id: phone-qr

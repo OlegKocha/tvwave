@@ -21,10 +21,21 @@ object EpgSearch {
     fun findChannels(state:AppState,query:String):List<Channel> {
         val term=normalize(query)
         if(term.isEmpty())return emptyList()
-        return state.channels.distinctBy{it.id}.filter{matches(it.name,term)}.sortedBy{
-            val name=normalize(it.name)
-            if(name==term)0 else if(name.startsWith(term))1 else 2
+        val words=term.split(' ')
+        val exact=ArrayList<Channel>()
+        val prefix=ArrayList<Channel>()
+        val other=ArrayList<Channel>()
+        val seen=HashSet<String>()
+        for(channel in state.channels){
+            if(!seen.add(channel.id))continue
+            val name=normalize(channel.name)
+            when {
+                name==term -> exact.add(channel)
+                name.startsWith(term) -> prefix.add(channel)
+                words.all{name.contains(it)} -> other.add(channel)
+            }
         }
+        return exact+prefix+other
     }
     private val newestFirst = compareByDescending<ProgrammeMatch> { it.programme.start }
         .thenBy { it.channel.name }.thenBy { it.channel.id }
@@ -32,9 +43,14 @@ object EpgSearch {
     /** Read newest broadcasts first. Channel offsets can change their displayed order. */
     fun find(db: SQLiteDatabase, state: AppState, query: String, now: Long,
              after: ProgrammeMatch? = null, checkCancelled: () -> Unit = {}): GuideSearchResults {
-        val term = normalize(query)
-        if (term.isEmpty()) return GuideSearchResults()
-        val channels = if (after == null) findChannels(state, term) else emptyList()
+        val channels = if(after==null)findChannels(state,query) else emptyList()
+        return findWithChannels(db,state,query,now,after,channels,checkCancelled)
+    }
+
+    internal fun findWithChannels(db:SQLiteDatabase,state:AppState,query:String,now:Long,
+                                 after:ProgrammeMatch?,channels:List<Channel>,checkCancelled:()->Unit):GuideSearchResults {
+        val term=normalize(query)
+        if(term.isEmpty())return GuideSearchResults()
         val links = EpgCache.links(db)
         val owners = state.channels.distinctBy { it.id }.filter { it.id in links }.groupBy { links.getValue(it.id) }
         if (owners.isEmpty()) return GuideSearchResults(channels)

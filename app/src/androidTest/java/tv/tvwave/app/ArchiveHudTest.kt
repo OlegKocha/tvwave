@@ -54,10 +54,11 @@ class ArchiveHudTest {
             waitFor("Past programme launches archive"){field<ArchiveSession?>("archiveSession")!=null}
             ready();key(KeyEvent.KEYCODE_MEDIA_PAUSE)
             waitFor("Central pause action focused"){device.hasObject(By.res("player-pause").focused(true))}
+            val pausedAt=position()
             key(KeyEvent.KEYCODE_DPAD_RIGHT);key(KeyEvent.KEYCODE_DPAD_CENTER)
-            waitFor("Forward one minute changes actual player position"){position()>=60000}
+            waitFor("Forward five seconds changes actual player position"){kotlin.math.abs(position() - pausedAt - 5000L) < 500}
             key(KeyEvent.KEYCODE_DPAD_LEFT);key(KeyEvent.KEYCODE_DPAD_LEFT);key(KeyEvent.KEYCODE_DPAD_CENTER)
-            waitFor("Rewind one minute"){position()<5000}
+            waitFor("Rewind five seconds returns to the paused position"){kotlin.math.abs(position() - pausedAt) < 500}
             key(KeyEvent.KEYCODE_DPAD_UP);key(KeyEvent.KEYCODE_DPAD_CENTER)
             repeat(6){key(KeyEvent.KEYCODE_DPAD_RIGHT)}
             assertTrue(field<Long?>("seekDraft")!!>=1800000)
@@ -75,7 +76,11 @@ class ArchiveHudTest {
             waitFor("Next programme starts"){!field<Boolean>("archiveEnded")&&position()<5000};ready()
             waitFor("Next programme HUD focused"){device.hasObject(By.res("player-pause").focused(true))}
             key(KeyEvent.KEYCODE_MEDIA_PAUSE)
-            key(KeyEvent.KEYCODE_DPAD_DOWN);repeat(4){key(KeyEvent.KEYCODE_DPAD_RIGHT)}
+            // An ongoing recording may also expose the five-second forward action.
+            for (step in 0 until 6) {
+                if(device.hasObject(By.res("player-live").focused(true)))break
+                key(KeyEvent.KEYCODE_DPAD_RIGHT)
+            }
             waitFor("Return to live action focused"){device.hasObject(By.res("player-live").focused(true))}
             key(KeyEvent.KEYCODE_DPAD_CENTER)
             waitFor("Return to live clears archive session"){field<ArchiveSession?>("archiveSession")==null};ready()

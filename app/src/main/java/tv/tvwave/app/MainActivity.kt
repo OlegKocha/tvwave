@@ -100,6 +100,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.*
 import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.ui.PlayerView
@@ -170,7 +171,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var player: ExoPlayer
     private lateinit var playbackDisplayMode:PlaybackDisplayMode
     private val stateLock=EpgUpdateService.stateLock
-    private val http=OkHttpClient.Builder().connectTimeout(15,TimeUnit.SECONDS).readTimeout(20,TimeUnit.SECONDS).callTimeout(30,TimeUnit.SECONDS).build()
+    private val http by lazy { OkHttpClient.Builder().connectTimeout(15,TimeUnit.SECONDS).readTimeout(20,TimeUnit.SECONDS).callTimeout(30,TimeUnit.SECONDS).build() }
     private var data by mutableStateOf(AppState())
     private var applying by mutableStateOf(false)
     private var loaded by mutableStateOf(false)
@@ -299,7 +300,7 @@ class MainActivity : ComponentActivity() {
     private var timeshiftDelayed by mutableStateOf(false)
     private var timeshiftTick by mutableLongStateOf(0)
     private var localPauseTime:Long?=null
-    private val localPlayback get()=timeshift.active && player.currentMediaItem?.localConfiguration?.uri?.scheme=="tvwave-timeshift"
+    private val localPlayback get()=::player.isInitialized && timeshift.active && player.currentMediaItem?.localConfiguration?.uri?.scheme=="tvwave-timeshift"
     private fun localTime():Long {
         localPauseTime?.let{if(!player.isPlaying)return it}
         val manifest=player.currentManifest as? androidx.media3.exoplayer.hls.HlsManifest
@@ -314,18 +315,28 @@ class MainActivity : ComponentActivity() {
         localPauseTime=if(player.isPlaying)null else target
         timeshiftDelayed=true;player.seekTo((target-start).coerceAtLeast(0));interaction++
     }
-    private fun startLive(channel:Channel, shouldPlay:Boolean=true){
-        timeshift.stop();timeshiftDelayed=false;localPauseTime=null;timeshiftTick++
+    private fun startLive(channel:Channel, shouldPlay:Boolean=true, switchingLiveChannel:Boolean=false){
+        ensureTimeshift()
+        timeshiftDelayed=false;localPauseTime=null;timeshiftTick++
         fun play(uri:android.net.Uri, resume:Boolean=shouldPlay){
             player.setMediaItem(MediaItem.Builder().setUri(uri).setLiveConfiguration(MediaItem.LiveConfiguration.Builder().setMinPlaybackSpeed(1f).setMaxPlaybackSpeed(1f).build()).build())
             player.prepare();player.playWhenReady=resume;applyTracks()
         }
-        player.stop()
-        if(!data.timeshiftEnabled||ArchivePreview.source(this,channel)!=null){play(android.net.Uri.parse(channel.url));return}
+        // Replacing an active media item lets Media3 reuse a compatible codec.
+        if (::player.isInitialized && !switchingLiveChannel) player.stop()
+        if(!data.timeshiftEnabled||ArchivePreview.source(this,channel)!=null){
+            timeshift.stop()
+            ensurePlayer()
+            play(Uri.parse(channel.url))
+            return
+        }
         playback="buffering";updateKeepScreen()
-        timeshift.start(channel.url,data.timeshiftMb,{uri->if(playing?.id==channel.id){timeshiftTick++;play(uri)}},{
+        timeshift.start(channel.url,data.timeshiftMb,{if(playing?.id==channel.id)timeshiftTick++},{
             if(playing?.id==channel.id){val resume=if(player.currentMediaItem?.localConfiguration?.uri?.scheme=="tvwave-timeshift")player.playWhenReady else shouldPlay;timeshiftTick++;timeshiftDelayed=false;localPauseTime=null;message=tr("timeshift_unavailable");play(android.net.Uri.parse(channel.url),resume)}
         })
+        // Fetch the live playlist while the first decoder pipeline is being created.
+        ensurePlayer()
+        play(timeshift.uri)
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -333,36 +344,6 @@ class MainActivity : ComponentActivity() {
         window.decorView.systemUiVisibility=View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
         repository=Repository(this)
         logoLoader=ChannelLogos(applicationContext)
-        // Keep platform decoders first; fall back to FFmpeg when a TV lacks an audio codec (e.g. MP2).
-        val renderers=DefaultRenderersFactory(this)
-            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
-        // Media requests can remain open while the player consumes its buffer.
-        // Keep connection/read timeouts, but no deadline for the entire stream.
-        val playbackHttp=http.newBuilder().callTimeout(0,TimeUnit.MILLISECONDS).build()
-        timeshift=Timeshift(java.io.File(cacheDir,"timeshift"),playbackHttp.newBuilder().readTimeout(12,TimeUnit.SECONDS).build(),lifecycleScope)
-        player=ExoPlayer.Builder(this,renderers).setMediaSourceFactory(PlaybackSources(timeshift.factory(androidx.media3.datasource.DefaultDataSource.Factory(this,OkHttpDataSource.Factory(playbackHttp).setUserAgent("TVWave/${BuildConfig.VERSION_NAME}")))).setLoadErrorHandlingPolicy(object:DefaultLoadErrorHandlingPolicy(0){override fun getRetryDelayMsFor(info:androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo)=C.TIME_UNSET})).build()
-        playbackDiagnostics=PlaybackDiagnostics(player,lifecycleScope)
-        playbackDisplayMode=PlaybackDisplayMode(this,player)
-        player.setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(),true)
-        player.addListener(object: Player.Listener {
-            override fun onPlaybackStateChanged(state: Int) {
-                if(state==Player.STATE_READY){
-                    val a=archiveSession;val target=archiveInitialPosition
-                    if(a?.remote==true&&target!=null){
-                        archiveInitialPosition=null
-                        val first=(player.currentManifest as? androidx.media3.exoplayer.hls.HlsManifest)?.mediaPlaylist?.segments?.firstOrNull()?.url
-                        val window=first?.let{IlookArchive.segmentTime(it)}?:a.firstSegmentStartMs
-                        val seek=(a.programme.start+target-window).coerceAtLeast(0)
-                        android.util.Log.i("TVWaveArchive","prepared requestedMs=${a.programme.start+target} windowMs=${window} playerMs=${player.currentPosition} seekMs=${seek}")
-                        player.seekTo(seek)
-                    }
-                }
-                updatePlayback()
-            }
-            override fun onIsPlayingChanged(isPlaying: Boolean) { updatePlayback() }
-            override fun onVideoSizeChanged(videoSize: VideoSize) { videoHeight=videoSize.height }
-            override fun onPlayerError(e: PlaybackException) { recoverPlayback(e) }
-        })
         lifecycleScope.launch {
             try { data=withContext(Dispatchers.IO){
                     stateLock.withLock{repository.load()}
@@ -392,6 +373,51 @@ class MainActivity : ComponentActivity() {
         }
         setContent { CompositionLocalProvider(LocalContentColor provides T.text) { App() } }
     }
+    private val playbackHttp by lazy { http.newBuilder().callTimeout(0,TimeUnit.MILLISECONDS).build() }
+    private fun ensureTimeshift() {
+        if (!::timeshift.isInitialized) {
+            timeshift = Timeshift(File(cacheDir, "timeshift"), playbackHttp.newBuilder().readTimeout(12,TimeUnit.SECONDS).build(), lifecycleScope)
+        }
+    }
+
+    private fun ensurePlayer() {
+        if (::player.isInitialized) return
+        ensureTimeshift()
+        // Keep platform decoders first; fall back to FFmpeg when a TV lacks an audio codec (e.g. MP2).
+        val renderers=DefaultRenderersFactory(this)
+            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+        // Media requests can remain open while the player consumes its buffer.
+        // Keep connection/read timeouts, but no deadline for the entire stream.
+
+        val loadControl = DefaultLoadControl.Builder().setBufferDurationsMsForStreaming(
+            DefaultLoadControl.DEFAULT_MIN_BUFFER_MS, DefaultLoadControl.DEFAULT_MAX_BUFFER_MS,
+            500, DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS
+        ).build()
+        player=ExoPlayer.Builder(this,renderers).setLoadControl(loadControl).setMediaSourceFactory(PlaybackSources(timeshift.factory(androidx.media3.datasource.DefaultDataSource.Factory(this,OkHttpDataSource.Factory(playbackHttp).setUserAgent("TVWave/${BuildConfig.VERSION_NAME}")))).setLoadErrorHandlingPolicy(object:DefaultLoadErrorHandlingPolicy(0){override fun getRetryDelayMsFor(info:androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo)=C.TIME_UNSET})).build()
+        playbackDiagnostics=PlaybackDiagnostics(player,lifecycleScope)
+        playbackDisplayMode=PlaybackDisplayMode(this,player)
+        playbackDisplayMode.setForeground(lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED))
+        player.setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(),true)
+        player.addListener(object: Player.Listener {
+            override fun onPlaybackStateChanged(state: Int) {
+                if(state==Player.STATE_READY){
+                    val a=archiveSession;val target=archiveInitialPosition
+                    if(a?.remote==true&&target!=null){
+                        archiveInitialPosition=null
+                        val first=(player.currentManifest as? androidx.media3.exoplayer.hls.HlsManifest)?.mediaPlaylist?.segments?.firstOrNull()?.url
+                        val window=first?.let{IlookArchive.segmentTime(it)}?:a.firstSegmentStartMs
+                        val seek=(a.programme.start+target-window).coerceAtLeast(0)
+                        android.util.Log.i("TVWaveArchive","prepared requestedMs=${a.programme.start+target} windowMs=${window} playerMs=${player.currentPosition} seekMs=${seek}")
+                        player.seekTo(seek)
+                    }
+                }
+                updatePlayback()
+            }
+            override fun onIsPlayingChanged(isPlaying: Boolean) { updatePlayback() }
+            override fun onVideoSizeChanged(videoSize: VideoSize) { videoHeight=videoSize.height }
+            override fun onPlayerError(e: PlaybackException) { recoverPlayback(e) }
+        })
+    }
     private fun updatePlayback() {
         playback=when { player.playerError!=null -> "error"; player.playbackState==Player.STATE_BUFFERING -> "buffering"; player.isPlaying -> "playing"; player.playbackState==Player.STATE_READY -> "paused"; else -> "stopped" }
         if(playback!="playing")controls=true
@@ -415,9 +441,31 @@ class MainActivity : ComponentActivity() {
         super.onWindowFocusChanged(hasFocus)
         if(hasFocus)updateWindowFocusRevision++
     }
-    override fun onStart(){super.onStart();playbackDisplayMode.setForeground(true);if(loaded&&!loadFailed)EpgUpdateService.resume(this)}
-    override fun onStop(){ if(localPlayback){player.stop();localPauseTime=null};timeshift.stop();timeshiftDelayed=false;timeshiftTick++; playbackDisplayMode.setForeground(false);cancelArchiveLoad();pausePlayback();exitConfirmation.reset();exitHint=false;super.onStop(); closePhone();cancelRecovery(); player.pause(); window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
-    override fun onDestroy(){ timeshift.stop();playbackDisplayMode.release();closePhone();cancelRecovery();player.release();logoLoader.close();repository.close();restoreBytes?.fill(0);exportBytes?.fill(0);super.onDestroy() }
+    override fun onStart(){super.onStart();if(::player.isInitialized)playbackDisplayMode.setForeground(true);if(loaded&&!loadFailed)EpgUpdateService.resume(this)}
+    override fun onStop(){
+        if(::player.isInitialized){
+            if(player.currentMediaItem?.localConfiguration?.uri?.scheme=="tvwave-timeshift"){
+                player.stop();localPauseTime=null
+            }
+            timeshift.stop()
+            playbackDisplayMode.setForeground(false)
+            pausePlayback()
+        }
+        timeshiftDelayed=false;timeshiftTick++;cancelArchiveLoad()
+        exitConfirmation.reset();exitHint=false;super.onStop();closePhone();cancelRecovery()
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
+    override fun onDestroy(){
+        stopMedia()
+        if(::player.isInitialized){playbackDisplayMode.release();player.release()}
+        closePhone();cancelRecovery();logoLoader.close();repository.close()
+        restoreBytes?.fill(0);exportBytes?.fill(0);super.onDestroy()
+    }
+    private fun stopMedia(){
+        if(::timeshift.isInitialized)timeshift.stop()
+        if(::player.isInitialized)player.stop()
+    }
+
     private fun cancelRecovery(){recoveryJob?.cancel();recoveryJob=null;stableJob?.cancel();stableJob=null;bufferingJob?.cancel();bufferingJob=null;recoveryStatus=""}
     private fun recoverPlayback(error:PlaybackException?){
         if(localPlayback && error?.errorCode==PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW){
@@ -456,7 +504,7 @@ class MainActivity : ComponentActivity() {
         if(archiveLoadJob?.isActive==true){cancelArchiveLoad();message=""}
         if(archiveSession!=null&&(player.playbackState==Player.STATE_ENDED||archivePosition>=archiveSession!!.duration)){archiveEnded=true;controls=true;return}
         if(recoveryJob?.isActive==true){cancelRecovery();player.stop();playbackError=tr("reconnection_stopped_select_retry_when_you_are_ready");playback="error"}
-        else if(player.isPlaying){cancelRecovery();pausePlayback()}
+        else if(player.isPlaying || (player.playWhenReady && player.playbackState==Player.STATE_BUFFERING)){cancelRecovery();pausePlayback()}
         else if(playback in listOf("error","stopped"))retryPlayback()else resumePlayback()
     }
     private fun closePhone(){phoneSession?.close();phoneSession=null}
@@ -536,7 +584,7 @@ class MainActivity : ComponentActivity() {
             catch(e:Exception){error=safeError(e)}
         }
     }
-    private fun applyTracks(){ player.trackSelectionParameters=player.trackSelectionParameters.buildUpon().setPreferredAudioLanguage(data.audioLanguage.ifEmpty{null}).setTrackTypeDisabled(C.TRACK_TYPE_TEXT,!data.subtitles).build() }
+    private fun applyTracks(){ if(!::player.isInitialized)return;player.trackSelectionParameters=player.trackSelectionParameters.buildUpon().setPreferredAudioLanguage(data.audioLanguage.ifEmpty{null}).setTrackTypeDisabled(C.TRACK_TYPE_TEXT,!data.subtitles).build() }
     private fun tune(channel:Channel,full:Boolean=true) {
         cancelArchiveLoad()
         val wasArchive=archiveSession!=null
@@ -549,15 +597,12 @@ class MainActivity : ComponentActivity() {
         if(playing?.id==channel.id && player.playbackState!=Player.STATE_IDLE && player.playerError==null) {
             if(full){panelStack.clear();screen="player"};controls=true;interaction++;player.play();return
         }
-        playbackDisplayMode.channelChanged()
-        // Amlogic retains interlace state; the emulator's goldfish decoder can retain
-        // the old output dimensions after HD -> SD adaptive reuse (nested stale frames).
-        // Reset decoding only on affected devices; keep the preview surface and focus.
-        val hardware=android.os.Build.HARDWARE.lowercase(java.util.Locale.ROOT)
-        if(hardware.contains("amlogic")||hardware=="ranchu"||hardware=="goldfish")player.stop()
+        if(::player.isInitialized)playbackDisplayMode.channelChanged()
+        val switchingLiveChannel=!wasArchive && playing!=null && playing?.id!=channel.id &&
+            ::player.isInitialized && player.playbackState==Player.STATE_READY
         playing=channel;selectedChannel=channel.id;videoHeight=0;playbackError="";playback="buffering";controls=true;interaction++
+        startLive(channel,switchingLiveChannel=switchingLiveChannel)
         player.repeatMode=if(ArchivePreview.source(this,channel)!=null)Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
-        startLive(channel)
         lifecycleScope.launch { try{stateLock.withLock {
             syncRefreshedPlaylists()
             if(data.channels.none{it.id==channel.id})return@withLock
@@ -607,6 +652,7 @@ class MainActivity : ComponentActivity() {
         }
     }
     private fun applyArchive(session:ArchiveSession,position:Long,focus:String,playWhenReady:Boolean,resetRecovery:Boolean){
+        ensurePlayer()
         cancelRecovery();if(resetRecovery)recovery.reset();playbackError="";message="";archiveEnded=false;seekDraft=null;pendingProgramme=null
         timeshift.stop();timeshiftDelayed=false;localPauseTime=null;player.stop();archiveSession=session;archivePosition=session.clamp(position,System.currentTimeMillis())
         archiveInitialPosition=if(session.remote)archivePosition else null
@@ -876,12 +922,12 @@ class MainActivity : ComponentActivity() {
             if(lists.size>15 || lists.sumOf{it.channels.size}>50000)throw UserError(tr("limit_reached_15_playlists_or_50_000_channels"))
             replacePlaylists(old,lists)
         };epgRevision++
-        if(playing?.id !in data.channels.map{it.id}){cancelRecovery();timeshift.stop();player.stop();playing=null}
+        if(playing?.id !in data.channels.map{it.id}){cancelRecovery();stopMedia();playing=null}
         candidate=null;recentOrder.enter(false,data.history);group=BuiltinGroups.ALL;query="";selectedChannel=p.channels.firstOrNull()?.id.orEmpty();panelStack.clear();screen="guide";message=tr("playlist_saved_channels", p.channels.size)
     }}
     private fun deletePlaylist(){work{
         change{replacePlaylists(it,it.playlists.filter{p->p.id!=selectedPlaylist})};epgRevision++
-        if(playing?.id !in data.channels.map{it.id}){cancelRecovery();timeshift.stop();player.stop();playing=null}
+        if(playing?.id !in data.channels.map{it.id}){cancelRecovery();stopMedia();playing=null}
         selectedChannel=data.channels.firstOrNull()?.id.orEmpty();group=BuiltinGroups.ALL;query="";recentOrder.enter(false,data.history)
         returnTo("playlists")
     }}
@@ -966,7 +1012,7 @@ class MainActivity : ComponentActivity() {
     private fun applyRestore(){val restored=restoreState?:return;fontSaveJob?.cancel();fontPreview=null;work {
         EpgUpdateService.cancelAndWait(this@MainActivity)
         epgFailures=emptyMap();epgStatus=""
-        cancelRecovery();timeshift.stop();player.stop();playing=null
+        cancelRecovery();stopMedia();playing=null
         change(resetCache=true){restored.copy(uiLanguage=restored.uiLanguage.ifEmpty{data.uiLanguage})};epgRevision++;loadFailed=false;restoreState=null;group=BuiltinGroups.ALL;query="";selectedChannel=restored.last.ifEmpty{restored.channels.firstOrNull()?.id.orEmpty()};panelStack.clear();screen="guide";message=tr("settings_and_playlists_restored");applyTracks()
     }}
     private fun programme(id:String?,time:Long=nowTime)=epgRows[id].orEmpty().lastOrNull{it.start<=time&&time<it.end}
@@ -995,7 +1041,15 @@ class MainActivity : ComponentActivity() {
         val selected=programme(c.id,guideTime.takeIf{it>0}?:nowTime)
         BoxWithConstraints(modifier.clipToBounds().background(T.surface)){
             val width=maxWidth
-            if(entries.isEmpty())Box(Modifier.fillMaxSize().then(focusSurface(focused)).padding(horizontal=T.small),contentAlignment=Alignment.CenterStart){Text(missingEpg(c.id),color=if(focused)T.onAccent else T.muted,fontSize=T.channel,maxLines=1,overflow=TextOverflow.Ellipsis)}
+            if(entries.isEmpty()) {
+                val assignable = canAssignGuide(c.id)
+                val action = if(assignable) Modifier.testTag("guide-assign:${c.id}")
+                    .focusProperties{canFocus=false}.clickable(enabled=active){openGuideMatch(c.id)} else Modifier
+                Box(Modifier.fillMaxSize().then(focusSurface(focused)).then(action).padding(horizontal=T.small),contentAlignment=Alignment.CenterStart){
+                    Text(if(assignable && selectedChannel==c.id) tr("assign_guide")+"  ›" else missingEpg(c.id),
+                        color=if(focused)T.onAccent else T.muted,fontSize=T.channel,maxLines=1,overflow=TextOverflow.Ellipsis)
+                }
+            }
             for(p in entries){
                 val x=width*((maxOf(p.start,from)-from).toFloat()/10800000L)
                 val w=width*((minOf(p.end,until)-maxOf(p.start,from)).toFloat()/10800000L)
@@ -1006,7 +1060,7 @@ class MainActivity : ComponentActivity() {
                     Text(p.title,color=if(chosen)T.onAccent else T.text,fontSize=T.channelName,lineHeight=T.channelLine,maxLines=2,overflow=TextOverflow.Ellipsis)
                 }
             }
-            if(nowTime in from until until)Box(Modifier.offset(x=width*((nowTime-from).toFloat()/10800000L)).width(T.focusLine).fillMaxHeight().background(T.danger))
+            if(entries.isNotEmpty() && nowTime in from until until)Box(Modifier.offset(x=width*((nowTime-from).toFloat()/10800000L)).width(T.focusLine).fillMaxHeight().background(T.danger))
         }
     }
     private fun returnTo(page:String){while(panelStack.isNotEmpty()){if(panelStack.removeAt(panelStack.lastIndex)==page)break};screen=page;panelFocus.remove(page)}
@@ -1205,16 +1259,94 @@ class MainActivity : ComponentActivity() {
         LaunchedEffect(catalogQuery){scroll.scrollToItem(0)}
         LazyColumn(Modifier.weight(1f).padding(T.focusGap),state=scroll,verticalArrangement=Arrangement.spacedBy(T.tiny)){
             itemsIndexed(catalog,key={_,entry->entry.id}){i,entry->Setting(entry.names.firstOrNull()?:entry.id,"catalog:${entry.id}",if(data.epgBindings[matchTarget]==EpgBinding(matchSource,entry.id))"✓"else"",modifier=if(i==0)Modifier.focusRequester(first).focusProperties{up=search}else Modifier,subtitle=entry.id){work{
-                change{it.copy(epgBindings=it.epgBindings+(matchTarget to EpgBinding(matchSource,entry.id)))}
-                val hasSchedule=withContext(Dispatchers.IO){EpgCache.hasSchedule(repository.readableDatabase, matchTarget, EpgRetention.cutoff(System.currentTimeMillis()), data.epgOffsets[matchTarget] ?: 0)}
-                if(!hasSchedule)updateEpg(data.sources.filter{it.id==matchSource})
-                epgRevision++;returnTo("epgMatchChannels")
+                saveChannelBinding(matchTarget,EpgBinding(matchSource,entry.id))
+                returnTo("epgMatchChannels")
             }}}
             if(catalog.isEmpty())item{Caption(if(matchCatalog.isEmpty())tr("the_catalogue_will_appear_after_updating_this_source")else tr("no_matches"))}
         }
     }
 
-    private fun filtered():List<Channel> = data.channels.filter {
+    private fun canAssignGuide(channelId:String) =
+        channelId !in epgLinks && epgStatuses.values.any { it.count>0 }
+
+    private fun openGuideMatch(channelId:String) {
+        selectedChannel=channelId
+        matchTarget=channelId
+        guideZone=1
+        guideTime=0L
+        panelFocus.remove("guideMatch")
+        openPanel("guideMatch")
+    }
+
+    private suspend fun saveChannelBinding(channelId:String,binding:EpgBinding) {
+        change{it.copy(epgBindings=it.epgBindings+(channelId to binding))}
+        val offset=data.epgOffsets[channelId] ?: 0
+        val cached=withContext(Dispatchers.IO){
+            EpgCache.hasSchedule(repository.readableDatabase,channelId,EpgRetention.cutoff(System.currentTimeMillis()),offset)
+        }
+        if(!cached)updateEpg(data.sources.filter{it.id==binding.source})
+        epgRevision++
+    }
+
+    @Composable private fun ColumnScope.GuideMatch() {
+        val channel=data.channels.find{it.id==matchTarget} ?: return
+        val sources=data.sources
+        var input by remember(channel.id){mutableStateOf("")}
+        val catalog by produceState<List<GuideMatchCandidate>?>(null,channel.id,sources,epgRevision){
+            value=withContext(Dispatchers.IO){
+                guideMatchCandidates(channel,sources.associateWith{EpgCache.catalog(repository.readableDatabase,it.id)})
+            }
+        }
+        val matches=remember(catalog,input){catalog.orEmpty().filter{it.matches(input.trim())}}
+        val list=rememberLazyListState()
+        val search=remember{FocusRequester()}
+        val first=remember{FocusRequester()}
+        val scope=rememberCoroutineScope()
+        val keyboard=LocalSoftwareKeyboardController.current
+        Notice()
+        Caption(channel.name)
+        Field(tr("search_epg"),input,modifier=Modifier.testTag("guide-match-query").focusRequester(search).onPreviewKeyEvent{event->
+            val key=event.nativeKeyEvent
+            if(key.keyCode==AndroidKey.KEYCODE_DPAD_DOWN && matches.isNotEmpty()){
+                if(key.action==AndroidKey.ACTION_DOWN && key.repeatCount==0){
+                    keyboard?.hide()
+                    scope.launch{list.scrollToItem(0);withFrameNanos{};first.requestFocus()}
+                }
+                true
+            }else false
+        }){input=it}
+        LaunchedEffect(input){list.scrollToItem(0)}
+        LaunchedEffect(catalog!=null){
+            if(catalog!=null && screen=="guideMatch"){
+                withFrameNanos{}
+                if(matches.isEmpty())search.requestFocus() else first.requestFocus()
+            }
+        }
+        val minute=nowTime/60000
+        LazyColumn(Modifier.weight(1f).padding(T.focusGap),state=list,verticalArrangement=Arrangement.spacedBy(T.tiny)){
+            itemsIndexed(matches,key={_,c->"${c.source.id}:${c.entry.id}"}){i,c->
+                val binding=EpgBinding(c.source.id,c.entry.id)
+                val offset=data.epgOffsets[channel.id] ?: 0
+                val preview by produceState<Programme?>(null,binding,minute,offset,epgRevision){
+                    value=withContext(Dispatchers.IO){EpgCache.candidateProgramme(repository.readableDatabase,binding,minute*60000,offset)}
+                }
+                val line=preview?.let{timeLabel(it.start)+"  "+it.title} ?: tr("guide_match_no_preview")
+                Setting(c.entry.names.firstOrNull() ?: c.entry.id,"guide-candidate:${c.source.id}:${c.entry.id}",value="",
+                    modifier=if(i==0)Modifier.focusRequester(first).focusProperties{up=search}else Modifier,
+                    subtitle=c.source.name+" · "+c.entry.id+"\n"+line){
+                    work{
+                        saveChannelBinding(channel.id,binding)
+                        guideZone=0
+                        guideTime=0L
+                        closePanels()
+                    }
+                }
+            }
+            if(matches.isEmpty())item{Caption(if(catalog==null) tr("search_loading") else tr("no_matches"))}
+        }
+    }
+
+    private fun filtered():List<Channel> = if(group==BuiltinGroups.ALL && query.isEmpty())data.channels else data.channels.filter {
         (when(group){BuiltinGroups.ALL->true;BuiltinGroups.FAVOURITES->it.id in data.favourites;BuiltinGroups.RECENT->it.id in recentOrder.ids;else->it.group==group}) && it.name.contains(query,ignoreCase=true)
     }.let { if(group==BuiltinGroups.RECENT)it.sortedBy{c->recentOrder.ids.indexOf(c.id)}else it }
 
@@ -1223,7 +1355,9 @@ class MainActivity : ComponentActivity() {
         val keys=listOf(AndroidKey.KEYCODE_DPAD_UP,AndroidKey.KEYCODE_DPAD_DOWN,AndroidKey.KEYCODE_DPAD_LEFT,AndroidKey.KEYCODE_DPAD_RIGHT,AndroidKey.KEYCODE_DPAD_CENTER,AndroidKey.KEYCODE_ENTER)
         if(event.keyCode !in keys)return false
         if(event.keyCode in listOf(AndroidKey.KEYCODE_DPAD_CENTER,AndroidKey.KEYCODE_ENTER)&&guideZone==1)
-            return programmeOk.handle(event,{openProgrammeDetails()},{requestSelectedReminder()})
+            return programmeOk.handle(event,{
+                if(canAssignGuide(selectedChannel))openGuideMatch(selectedChannel) else openProgrammeDetails()
+            },{requestSelectedReminder()})
         if(event.action==AndroidKey.ACTION_DOWN){
             programmeOk.cancel()
             val visible=filtered();val index=visible.indexOfFirst{it.id==selectedChannel}.coerceAtLeast(0)
@@ -1262,7 +1396,7 @@ class MainActivity : ComponentActivity() {
         "more"->tr("more");"search"->tr("search");"epg"->tr("programme_guides")
         "epgEdit"->if(epgSourceId.isEmpty())tr("add_programme_guide")else tr("edit_programme_guide")
         "epgMenu"->tr("epg_source");"epgDelete"->tr("delete_source");"epgInterval"->tr("update_every")
-        "epgMatchChannels"->tr("channel_matching");"epgMatchSource"->tr("choose_source");"epgMatchCatalog"->tr("epg_channel")
+        "guideMatch"->tr("assign_guide");"epgMatchChannels"->tr("channel_matching");"epgMatchSource"->tr("choose_source");"epgMatchCatalog"->tr("epg_channel")
         "playlistMenu"->tr("playlist");"playlistDelete"->tr("delete_playlist");else->"TV Wave"
     }
     private fun defaultFocus(page:String=screen):String=when(page){
@@ -1287,8 +1421,14 @@ class MainActivity : ComponentActivity() {
         }
     }
     @Composable private fun App(){
+        if(!loaded){
+            Box(Modifier.fillMaxSize().background(T.bg),contentAlignment=Alignment.Center){
+                CircularProgressIndicator(Modifier.size(40.dp).testTag("app-loading"),color=T.text)
+            }
+            return
+        }
         val density=LocalDensity.current
-        if(loaded&&!loadFailed&&data.uiLanguage.isEmpty()){
+        if(!loadFailed&&data.uiLanguage.isEmpty()){
             MaterialTheme(colorScheme=darkColorScheme(background=T.bg,surface=T.surface,onBackground=T.text,onSurface=T.text,primary=T.accent,onPrimary=T.onAccent)){
                 BackHandler { finish() }
                 Column(Modifier.fillMaxSize().background(T.bg).padding(T.safe).semantics{testTagsAsResourceId=true},verticalArrangement=Arrangement.spacedBy(T.gap)){
@@ -1306,6 +1446,16 @@ class MainActivity : ComponentActivity() {
     }
     @Composable private fun AppContent(){
         val rootFocus=remember{FocusRequester()}
+        LaunchedEffect(loaded && data.playlists.isNotEmpty()){
+            if(!loaded || data.playlists.isEmpty())return@LaunchedEffect
+            withFrameNanos { }
+            withContext(Dispatchers.IO){
+                // Discover capabilities without allocating a decoder, surface or player.
+                playbackHttp
+                androidx.media3.exoplayer.mediacodec.MediaCodecUtil.warmDecoderInfoCache(
+                    androidx.media3.common.MimeTypes.VIDEO_H264,false,false)
+            }
+        }
         LaunchedEffect(screen){programmeOk.cancel()}
         LaunchedEffect(loaded){
             if(!loaded)return@LaunchedEffect
@@ -1350,7 +1500,9 @@ class MainActivity : ComponentActivity() {
             if(loaded){
                 val list=filtered();val index=list.indexOfFirst{it.id==selectedChannel}.coerceAtLeast(0)
                 val around=maxOf(6,visibleGuideRows)
-                val ids=(list.drop((index-around).coerceAtLeast(0)).take(around*2+2).map{it.id}+listOfNotNull(playing?.id)).distinct()
+                val start=(index-around).coerceAtLeast(0)
+                val end=(start+around*2+2).coerceAtMost(list.size)
+                val ids=(list.subList(start,end).map{it.id}+listOfNotNull(playing?.id)).distinct()
                 val from=EpgRetention.cutoff(nowTime)
                 epgRows=withContext(Dispatchers.IO){
                     if(data.sources.isEmpty())emptyMap()
@@ -1388,111 +1540,108 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(screen,controls,playback,interaction,seekDraft,pendingProgramme,archiveEnded,diagnosticsOpen){if(screen=="player"&&controls&&playback=="playing"&&seekDraft==null&&pendingProgramme==null&&!archiveEnded){delay(3000);controls=false}}
             LaunchedEffect(message){if(message.isNotEmpty()&&screen in listOf("guide","player","details","browse","search")){delay(4500);message=""}}
             Box(Modifier.fillMaxSize().semantics{testTagsAsResourceId=true}.clipToBounds().background(T.bg).onPreviewKeyEvent{handleRemote(it.nativeKeyEvent)}.focusRequester(rootFocus).focusable()){
-                if(!loaded)CircularProgressIndicator(Modifier.align(Alignment.Center).size(40.dp).testTag("app-loading"),color=T.text)
-                else {
-                    val base=when(screen){"browse"->"player";"details"->"details";"guide","player","reminders"->screen;else->backgroundScreen}
-                    val overlay=screen !in listOf("guide","player","browse","details","reminders")
-                    val leftDepth=when{screen=="search"->0;screen=="main"->2;screen=="groups"->1;!overlay->0;panelStack.any{it in listOf("main","search")}->2;"groups" in panelStack->1;else->0}
-                    val expandedMainWidth=T.leftMainWidth*maxOf(1f,LocalDensity.current.fontScale)
-                    val mainWidth=when(leftDepth){2->expandedMainWidth;1->T.leftRailWidth;else->0.dp}
-                    var lastMenuExpanded by remember{mutableStateOf(false)}
-                    val menuExpanded=if(leftDepth>0)leftDepth==2 else lastMenuExpanded
-                    SideEffect{if(leftDepth>0)lastMenuExpanded=leftDepth==2}
-                    var previousScreen by remember{mutableStateOf(screen)}
-                    val reminderTransition=screen=="reminders"||previousScreen=="reminders"
-                    SideEffect{previousScreen=screen}
-                    val targetGuideShift=if(leftDepth>0)mainWidth+T.leftGroupWidth*maxOf(1f,LocalDensity.current.fontScale)else 0.dp
-                    val animatedGuideShift by animateDpAsState(targetGuideShift,tween(if(reminderTransition)0 else T.menuMotionMs),label="guide-shift")
-                    val guideShift=if(reminderTransition)targetGuideShift else animatedGuideShift
-                    val groupShift by animateDpAsState(mainWidth,tween(T.menuMotionMs),label="group-shift")
-                    BoxWithConstraints(Modifier.fillMaxSize().offset(x=guideShift).then(if(overlay)Modifier.clearAndSetSemantics{}else Modifier)){
-                        val full=base=="player"
-                        val reminderRect=reminderPreviewRect(maxWidth,LocalDensity.current.fontScale,reminders.isNotEmpty())
-                        val motion=tween<androidx.compose.ui.unit.Dp>(if(reminderTransition)0 else T.videoMotionMs,easing=FastOutSlowInEasing)
-                        val targetX=if(full)0.dp else if(base=="reminders")reminderRect.left else T.safe
-                        val targetY=if(full)0.dp else if(base=="reminders")reminderRect.top else T.previewTop
-                        val targetWidth=if(full)maxWidth else if(base=="reminders")reminderRect.right-reminderRect.left else guidePreviewWidth(maxWidth-T.safe*2)
-                        val targetHeight=if(full)maxHeight else if(base=="reminders")reminderRect.bottom-reminderRect.top else T.previewHeight
-                        val animatedX by animateDpAsState(targetX,motion,label="video-x")
-                        val animatedY by animateDpAsState(targetY,motion,label="video-y")
-                        val animatedWidth by animateDpAsState(targetWidth,motion,label="video-width")
-                        val animatedHeight by animateDpAsState(targetHeight,motion,label="video-height")
-                        val x=if(reminderTransition)targetX else animatedX
-                        val y=if(reminderTransition)targetY else animatedY
-                        val width=if(reminderTransition)targetWidth else animatedWidth
-                        val height=if(reminderTransition)targetHeight else animatedHeight
-                        val radius by animateDpAsState(if(full)0.dp else T.previewRadius,motion,label="video-radius")
-                        if(base=="details")ProgrammeDetails()else if(base=="reminders")RemindersPage()else if(!full)Guide(active=!overlay)
-                        // One PlayerView and one video surface survive preview/fullscreen transitions.
-                        if(playing!=null)Box(Modifier.offset(x=x,y=y).size(width,height).clip(RoundedCornerShape(radius))){
-                            Video(Modifier.fillMaxSize())
-                            if(!full)Text(tr("watching", playing?.name),Modifier.align(Alignment.BottomStart).padding(T.small).background(T.bg,RoundedCornerShape(T.radius)).padding(horizontal=T.small,vertical=T.tiny),color=T.text,fontSize=T.micro,maxLines=1,overflow=TextOverflow.Ellipsis)
+                val base=when(screen){"browse"->"player";"details"->"details";"guide","player","reminders"->screen;else->backgroundScreen}
+                val overlay=screen !in listOf("guide","player","browse","details","reminders")
+                val leftDepth=when{screen=="search"->0;screen=="main"->2;screen=="groups"->1;!overlay->0;panelStack.any{it in listOf("main","search")}->2;"groups" in panelStack->1;else->0}
+                val expandedMainWidth=T.leftMainWidth*maxOf(1f,LocalDensity.current.fontScale)
+                val mainWidth=when(leftDepth){2->expandedMainWidth;1->T.leftRailWidth;else->0.dp}
+                var lastMenuExpanded by remember{mutableStateOf(false)}
+                val menuExpanded=if(leftDepth>0)leftDepth==2 else lastMenuExpanded
+                SideEffect{if(leftDepth>0)lastMenuExpanded=leftDepth==2}
+                var previousScreen by remember{mutableStateOf(screen)}
+                val reminderTransition=screen=="reminders"||previousScreen=="reminders"
+                SideEffect{previousScreen=screen}
+                val targetGuideShift=if(leftDepth>0)mainWidth+T.leftGroupWidth*maxOf(1f,LocalDensity.current.fontScale)else 0.dp
+                val animatedGuideShift by animateDpAsState(targetGuideShift,tween(if(reminderTransition)0 else T.menuMotionMs),label="guide-shift")
+                val guideShift=if(reminderTransition)targetGuideShift else animatedGuideShift
+                val groupShift by animateDpAsState(mainWidth,tween(T.menuMotionMs),label="group-shift")
+                BoxWithConstraints(Modifier.fillMaxSize().offset(x=guideShift).then(if(overlay)Modifier.clearAndSetSemantics{}else Modifier)){
+                    val full=base=="player"
+                    val reminderRect=reminderPreviewRect(maxWidth,LocalDensity.current.fontScale,reminders.isNotEmpty())
+                    val motion=tween<androidx.compose.ui.unit.Dp>(if(reminderTransition)0 else T.videoMotionMs,easing=FastOutSlowInEasing)
+                    val targetX=if(full)0.dp else if(base=="reminders")reminderRect.left else T.safe
+                    val targetY=if(full)0.dp else if(base=="reminders")reminderRect.top else T.previewTop
+                    val targetWidth=if(full)maxWidth else if(base=="reminders")reminderRect.right-reminderRect.left else guidePreviewWidth(maxWidth-T.safe*2)
+                    val targetHeight=if(full)maxHeight else if(base=="reminders")reminderRect.bottom-reminderRect.top else T.previewHeight
+                    val animatedX by animateDpAsState(targetX,motion,label="video-x")
+                    val animatedY by animateDpAsState(targetY,motion,label="video-y")
+                    val animatedWidth by animateDpAsState(targetWidth,motion,label="video-width")
+                    val animatedHeight by animateDpAsState(targetHeight,motion,label="video-height")
+                    val x=if(reminderTransition)targetX else animatedX
+                    val y=if(reminderTransition)targetY else animatedY
+                    val width=if(reminderTransition)targetWidth else animatedWidth
+                    val height=if(reminderTransition)targetHeight else animatedHeight
+                    val radius by animateDpAsState(if(full)0.dp else T.previewRadius,motion,label="video-radius")
+                    if(base=="details")ProgrammeDetails()else if(base=="reminders")RemindersPage()else if(!full)Guide(active=!overlay)
+                    // One PlayerView and one video surface survive preview/fullscreen transitions.
+                    if(playing!=null)Box(Modifier.offset(x=x,y=y).size(width,height).clip(RoundedCornerShape(radius))){
+                        Video(Modifier.fillMaxSize())
+                        if(!full)Text(tr("watching", playing?.name),Modifier.align(Alignment.BottomStart).padding(T.small).background(T.bg,RoundedCornerShape(T.radius)).padding(horizontal=T.small,vertical=T.tiny),color=T.text,fontSize=T.micro,maxLines=1,overflow=TextOverflow.Ellipsis)
+                    }
+                    if(screen=="browse")ChannelBrowser()else if(full)PlayerScreen(active=!overlay)
+                }
+                if(screen !in listOf("reminders","search")){
+                AnimatedVisibility(visible=leftDepth>0,enter=slideInHorizontally(tween(T.menuMotionMs)){-it},exit=slideOutHorizontally(tween(if(reminderTransition)0 else T.menuMotionMs)){-it}){
+                    CompositionLocalProvider(LocalPanelPage provides "groups"){Box(Modifier.fillMaxHeight().offset(x=groupShift).width((T.leftGroupWidth*maxOf(1f,LocalDensity.current.fontScale)))){GroupsDrawer()}}
+                }
+                AnimatedVisibility(visible=leftDepth>0,enter=slideInHorizontally(tween(T.menuMotionMs)){-it},exit=slideOutHorizontally(tween(if(reminderTransition)0 else T.menuMotionMs)){-it}){
+                    val page=if(screen=="search")"search"else"main"
+                    CompositionLocalProvider(LocalPanelPage provides page){Box(Modifier.fillMaxHeight().width(groupShift).clipToBounds()){
+                        // Animate only the clipped viewport. Text is always measured at its
+                        // final width, so letters never reflow into a vertical column.
+                        Box(Modifier.fillMaxHeight().wrapContentWidth(Alignment.Start,unbounded=true)
+                            .width(if(menuExpanded)expandedMainWidth else T.leftRailWidth)){
+                            if(menuExpanded)MainMenu()
+                            else MenuRail(if(screen=="settings"||"settings" in panelStack)"settings"else if(group==BuiltinGroups.FAVOURITES)"favourites"else"tv"){key->panelFocus["main"]=key;showMainMenu()}
                         }
-                        if(screen=="browse")ChannelBrowser()else if(full)PlayerScreen(active=!overlay)
+                    }}
+                }
+                }
+                val right=overlay&&screen !in listOf("groups","main","search")
+                var lastPanel by remember{mutableStateOf("settings")}
+                SideEffect{if(right)lastPanel=screen}
+                val panel=if(right)screen else lastPanel
+                AnimatedVisibility(visible=right,enter=fadeIn(tween(T.menuMotionMs)),exit=fadeOut(tween(T.menuMotionMs))){Box(Modifier.fillMaxSize().background(T.veil))}
+                AnimatedVisibility(visible=right,enter=slideInHorizontally(tween(T.menuMotionMs)){it}+fadeIn(tween(T.menuMotionMs)),exit=slideOutHorizontally(tween(T.menuMotionMs)){it}+fadeOut(tween(T.menuMotionMs))){
+                    AnimatedContent(targetState=panel,transitionSpec={fadeIn(tween(T.menuMotionMs)) togetherWith fadeOut(tween(T.menuMotionMs))},label="panel-page"){page->
+                        CompositionLocalProvider(LocalPanelPage provides page){Box(Modifier.fillMaxSize().focusProperties{canFocus=right&&page==screen}){Drawer()}}
                     }
-                    if(screen !in listOf("reminders","search")){
-                    AnimatedVisibility(visible=leftDepth>0,enter=slideInHorizontally(tween(T.menuMotionMs)){-it},exit=slideOutHorizontally(tween(if(reminderTransition)0 else T.menuMotionMs)){-it}){
-                        CompositionLocalProvider(LocalPanelPage provides "groups"){Box(Modifier.fillMaxHeight().offset(x=groupShift).width((T.leftGroupWidth*maxOf(1f,LocalDensity.current.fontScale)))){GroupsDrawer()}}
-                    }
-                    AnimatedVisibility(visible=leftDepth>0,enter=slideInHorizontally(tween(T.menuMotionMs)){-it},exit=slideOutHorizontally(tween(if(reminderTransition)0 else T.menuMotionMs)){-it}){
-                        val page=if(screen=="search")"search"else"main"
-                        CompositionLocalProvider(LocalPanelPage provides page){Box(Modifier.fillMaxHeight().width(groupShift).clipToBounds()){
-                            // Animate only the clipped viewport. Text is always measured at its
-                            // final width, so letters never reflow into a vertical column.
-                            Box(Modifier.fillMaxHeight().wrapContentWidth(Alignment.Start,unbounded=true)
-                                .width(if(menuExpanded)expandedMainWidth else T.leftRailWidth)){
-                                if(menuExpanded)MainMenu()
-                                else MenuRail(if(screen=="settings"||"settings" in panelStack)"settings"else if(group==BuiltinGroups.FAVOURITES)"favourites"else"tv"){key->panelFocus["main"]=key;showMainMenu()}
-                            }
-                        }}
-                    }
-                    }
-                    val right=overlay&&screen !in listOf("groups","main","search")
-                    var lastPanel by remember{mutableStateOf("settings")}
-                    SideEffect{if(right)lastPanel=screen}
-                    val panel=if(right)screen else lastPanel
-                    AnimatedVisibility(visible=right,enter=fadeIn(tween(T.menuMotionMs)),exit=fadeOut(tween(T.menuMotionMs))){Box(Modifier.fillMaxSize().background(T.veil))}
-                    AnimatedVisibility(visible=right,enter=slideInHorizontally(tween(T.menuMotionMs)){it}+fadeIn(tween(T.menuMotionMs)),exit=slideOutHorizontally(tween(T.menuMotionMs)){it}+fadeOut(tween(T.menuMotionMs))){
-                        AnimatedContent(targetState=panel,transitionSpec={fadeIn(tween(T.menuMotionMs)) togetherWith fadeOut(tween(T.menuMotionMs))},label="panel-page"){page->
-                            CompositionLocalProvider(LocalPanelPage provides page){Box(Modifier.fillMaxSize().focusProperties{canFocus=right&&page==screen}){Drawer()}}
+                }
+                if(screen=="search")UnifiedSearch()
+                reminderDialog?.let{r->
+                    val exists=reminders.any{it.id==r.id}
+                    ReminderConfirm(r,exists,onConfirm={
+                        if(exists)saveReminders(reminders.filterNot{it.id==r.id})
+                        else if(r.start>System.currentTimeMillis())saveReminders(reminders+r)
+                        reminderDialog=null
+                    },onDismiss={reminderDialog=null})
+                }
+                activeReminder?.let{r->
+                    ReminderNotification(r,reminderSeconds,reminderInteracted,onInteraction={reminderInteracted=true},onWatch={
+                        activeReminder=null
+                        data.channels.firstOrNull{it.id==r.channelId}?.let{c->panelStack.clear();screen="player";tune(c,false);controls=true;interaction++}
+                    },onClose={activeReminder=null})
+                }
+                if(!overlay&&(archiveLoading||archiveSession!=null&&playback=="buffering")) {
+                    if(screen=="player") {
+                        Box(Modifier.align(Alignment.Center).testTag("archive-loading")) {
+                            CircularProgressIndicator(
+                                modifier=Modifier.size(T.loadingSize).testTag("archive-loading-progress")
+                                    .semantics{contentDescription=tr("loading_recording")},
+                                color=T.accent,strokeWidth=T.loadingStroke,trackColor=Color.Transparent)
                         }
-                    }
-                    if(screen=="search")UnifiedSearch()
-                    reminderDialog?.let{r->
-                        val exists=reminders.any{it.id==r.id}
-                        ReminderConfirm(r,exists,onConfirm={
-                            if(exists)saveReminders(reminders.filterNot{it.id==r.id})
-                            else if(r.start>System.currentTimeMillis())saveReminders(reminders+r)
-                            reminderDialog=null
-                        },onDismiss={reminderDialog=null})
-                    }
-                    activeReminder?.let{r->
-                        ReminderNotification(r,reminderSeconds,reminderInteracted,onInteraction={reminderInteracted=true},onWatch={
-                            activeReminder=null
-                            data.channels.firstOrNull{it.id==r.channelId}?.let{c->panelStack.clear();screen="player";tune(c,false);controls=true;interaction++}
-                        },onClose={activeReminder=null})
-                    }
-                    if(!overlay&&(archiveLoading||archiveSession!=null&&playback=="buffering")) {
-                        if(screen=="player") {
-                            Box(Modifier.align(Alignment.Center).testTag("archive-loading")) {
-                                CircularProgressIndicator(
-                                    modifier=Modifier.size(T.loadingSize).testTag("archive-loading-progress")
-                                        .semantics{contentDescription=tr("loading_recording")},
-                                    color=T.accent,strokeWidth=T.loadingStroke,trackColor=Color.Transparent)
-                            }
-                        }else {
-                            Column(Modifier.align(Alignment.Center).fillMaxWidth(.46f).testTag("archive-loading")
-                                .background(T.surface.copy(alpha=.96f),RoundedCornerShape(T.radius)).padding(T.pad),
-                                verticalArrangement=Arrangement.spacedBy(T.gap)) {
-                                Text(tr("loading_recording"),color=T.text,fontSize=T.body)
-                                LinearProgressIndicator(Modifier.fillMaxWidth().testTag("archive-loading-progress"),color=T.accent,trackColor=T.border)
-                                if(archiveLoading)Caption(tr("archive_loading_cancel"))
-                            }
+                    }else {
+                        Column(Modifier.align(Alignment.Center).fillMaxWidth(.46f).testTag("archive-loading")
+                            .background(T.surface.copy(alpha=.96f),RoundedCornerShape(T.radius)).padding(T.pad),
+                            verticalArrangement=Arrangement.spacedBy(T.gap)) {
+                            Text(tr("loading_recording"),color=T.text,fontSize=T.body)
+                            LinearProgressIndicator(Modifier.fillMaxWidth().testTag("archive-loading-progress"),color=T.accent,trackColor=T.border)
+                            if(archiveLoading)Caption(tr("archive_loading_cancel"))
                         }
                     }
-                    if(exitHint || (!overlay||screen=="search")&&message.isNotEmpty()) {
-                        Text(if(exitHint)tr("press_back_twice_to_exit")else message,Modifier.align(Alignment.BottomCenter).padding(bottom=T.footerSpace).background(T.raised,RoundedCornerShape(T.radius)).padding(T.gap),color=T.text,fontSize=T.caption)
-                    }
+                }
+                if(exitHint || (!overlay||screen=="search")&&message.isNotEmpty()) {
+                    Text(if(exitHint)tr("press_back_twice_to_exit")else message,Modifier.align(Alignment.BottomCenter).padding(bottom=T.footerSpace).background(T.raised,RoundedCornerShape(T.radius)).padding(T.gap),color=T.text,fontSize=T.caption)
                 }
             }
         }
@@ -1518,8 +1667,11 @@ class MainActivity : ComponentActivity() {
         var focused by remember{mutableStateOf(false)}
         val requester=remember{FocusRequester()};val page=LocalPanelPage.current?:screen
         val interactive=enabled && page==screen
-        // Invalidating a checked playlist while typing must not pull focus out of the field.
-        // Validation/file loading already restore focus when busy finishes (interactive changes).
+        // A fast validation can finish between frames without changing interactive in composition.
+        // Enter this effect only on success so editing the URL never steals focus from the field.
+        if(page=="source" && key=="source-add" && candidate!=null && interactive){
+            LaunchedEffect(requester){requester.requestFocus()}
+        }
         LaunchedEffect(page,key,interactive,if(page=="epg")epgUpdating else false){
             val wanted=when{
                 page=="epg"&&epgUpdating&&panelFocus[page]=="epg-update"->"epg-cancel"
@@ -1677,7 +1829,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 Row(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal=T.safe).padding(bottom=T.top),horizontalArrangement=Arrangement.SpaceBetween){
-                    Caption(if(guideZone==1)tr("programmes_ok_details_back_now")else tr("groups_ok", if(selected?.id==playing?.id)tr("full_screen")else tr("watch")))
+                    Caption(if(guideZone==1 && canAssignGuide(selectedChannel))tr("guide_match_hint") else if(guideZone==1)tr("programmes_ok_details_back_now")else tr("groups_ok", if(selected?.id==playing?.id)tr("full_screen")else tr("watch")))
                     Caption(tr("settings_are_in_the_left_menu"))
                 }
             }
@@ -1741,13 +1893,11 @@ class MainActivity : ComponentActivity() {
             try{
                 val snapshot=data
                 val time=guideSearch.searchTime
-                if(after==null){
-                    val channels=withContext(Dispatchers.Default){EpgSearch.findChannels(snapshot,term)}
-                    guideSearch.results=GuideSearchResults(channels=channels)
-                }
+                val channels=if(after==null)withContext(Dispatchers.Default){EpgSearch.findChannels(snapshot,term)} else emptyList()
+                if(after==null)guideSearch.results=GuideSearchResults(channels=channels)
                 val page=withContext(Dispatchers.IO){
                     val job=currentCoroutineContext()
-                    EpgSearch.find(repository.readableDatabase,snapshot,term,time,after){job.ensureActive()}
+                    EpgSearch.findWithChannels(repository.readableDatabase,snapshot,term,time,after,channels){job.ensureActive()}
                 }
                 if(after==null){
                     guideSearch.results=page
@@ -1755,7 +1905,7 @@ class MainActivity : ComponentActivity() {
                 }else{
                     val current=guideSearch.results
                     guideSearch.results=current.copy(programmes=current.programmes+page.programmes,hasNextPage=page.hasNextPage)
-                    guideSearch.selectedKey=page.programmes.firstOrNull()?.key ?: after.key
+                    if(guideSearch.programmesTab!=false)guideSearch.selectedKey=page.programmes.firstOrNull()?.key ?: after.key
                     guideSearch.finishAppend()
                 }
             }catch(e:CancellationException){throw e}
@@ -1816,7 +1966,7 @@ class MainActivity : ComponentActivity() {
                 onFile={if(!busy)readFile(it)},onClose=::back)
             return
         }
-        Column(Modifier.align(Alignment.CenterEnd).fillMaxHeight().fillMaxWidth(if(page=="phone")T.phoneDrawerFraction else if(page in listOf("appearance","timeshift")).5f else if(page=="updates").46f else T.drawerFraction).background(T.surface)
+        Column(Modifier.align(Alignment.CenterEnd).fillMaxHeight().fillMaxWidth(if(page=="phone")T.phoneDrawerFraction else if(page in listOf("appearance","timeshift","guideMatch")).5f else if(page=="updates").46f else T.drawerFraction).background(T.surface)
             .padding(start=T.pad,end=T.safe,top=T.drawerTop,bottom=T.drawerBottom),verticalArrangement=Arrangement.spacedBy(T.small)){
             Text(if(panelStack.isNotEmpty())panelTitle(panelStack.last()).uppercase(L10n.locale)else tr("tv_wave"),color=T.muted,fontSize=T.micro,lineHeight=T.micro*1.3f,maxLines=1,overflow=TextOverflow.Ellipsis)
             Text(panelTitle(page),color=T.text,fontSize=T.title,lineHeight=(T.title)*1.2f,fontWeight=FontWeight.SemiBold,maxLines=2,overflow=TextOverflow.Ellipsis)
@@ -1827,6 +1977,7 @@ class MainActivity : ComponentActivity() {
             when(page){
                 "epg" -> EpgSettings()
                 "epgMatchChannels" -> MatchChannels()
+                "guideMatch" -> GuideMatch()
                 "epgMatchCatalog" -> MatchCatalog()
                 "updates" -> Column(Modifier.weight(1f).padding(T.focusGap),verticalArrangement=Arrangement.spacedBy(T.small)){UpdateScreen()}
                 else -> Column(Modifier.weight(1f).verticalScroll(remember(page){androidx.compose.foundation.ScrollState(0)}).padding(T.focusGap),verticalArrangement=Arrangement.spacedBy(T.tiny)){
@@ -2076,7 +2227,7 @@ class MainActivity : ComponentActivity() {
         Caption(tr("audio_tracks_and_subtitles_depend_on_the_channel"))
     }
     @Composable private fun MoreScreen(){
-        Setting(if(player.isPlaying)tr("pause")else tr("resume"),"pause",""){togglePlayback();closePanels();controls=true}
+        if(playing!=null)Setting(if(player.isPlaying)tr("pause")else tr("resume"),"pause",""){togglePlayback();closePanels();controls=true}
         ToggleSetting(tr("subtitles"),"subtitles",data.subtitles){persist(updateTracks=true){it.copy(subtitles=!it.subtitles)}}
         Setting(tr("recently_watched"),"history"){selectGroup(BuiltinGroups.RECENT)}
         Setting(tr("settings"),"settings"){openPanel("settings")}

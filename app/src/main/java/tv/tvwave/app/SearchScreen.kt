@@ -47,6 +47,7 @@ class GuideSearchState {
     var submittedQuery by mutableStateOf("")
     var searchRevision by mutableIntStateOf(0)
     var selectedKey by mutableStateOf("")
+    var programmesTab by mutableStateOf<Boolean?>(null)
     var returnToResults=false
     var results by mutableStateOf(GuideSearchResults())
     var recentQueries by mutableStateOf<List<String>>(emptyList())
@@ -71,6 +72,7 @@ class GuideSearchState {
     }
     fun submit() {
         resetResults()
+        programmesTab = null
         searchTime = System.currentTimeMillis()
         submittedQuery = query.trim()
         searchRevision++
@@ -83,7 +85,7 @@ class GuideSearchState {
 }
 private data class SearchEntry(val key:String,val channel:Channel,val programme:Programme?=null)
 
-/** One remote-controlled list: channels always precede programme matches. */
+/** The sidebar, result tabs and detail panel share the same remote navigation surface. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable fun SearchScreen(
     state:GuideSearchState,loading:Boolean,error:String,detail:Programme?,
@@ -98,8 +100,13 @@ private data class SearchEntry(val key:String,val channel:Channel,val programme:
     onRememberQuery:(String)->Unit,onRemoveQuery:(String)->Unit
 ) {
     val results=state.results
-    val entries=remember(results){results.channels.map{SearchEntry("channel:${it.id}",it)}+results.programmes.map{SearchEntry(it.key,it.channel,it.programme)}}
-    val moreSelected=results.hasNextPage && state.selectedKey=="search-more"
+    val programmesTab = state.programmesTab ?: (results.channels.isEmpty() && results.programmes.isNotEmpty())
+    val entries = remember(results, programmesTab) {
+        if (programmesTab) results.programmes.map { SearchEntry(it.key, it.channel, it.programme) }
+        else results.channels.map { SearchEntry("channel:${it.id}", it) }
+    }
+    val canAppend = programmesTab && results.hasNextPage
+    val moreSelected = canAppend && state.selectedKey == "search-more"
     val index=if(moreSelected) entries.size else entries.indexOfFirst{it.key==state.selectedKey}.coerceAtLeast(0)
     val selected=entries.getOrNull(index)
     val list=rememberLazyListState()
@@ -113,6 +120,13 @@ private data class SearchEntry(val key:String,val channel:Channel,val programme:
     val keyboard=LocalSoftwareKeyboardController.current
     var resultsFocused by remember{mutableStateOf(false)}
     val restoreResults=remember{state.returnToResults}
+    var onTabs by remember { mutableStateOf(false) }
+    fun selectTab(programmes: Boolean) {
+        state.programmesTab = programmes
+        onTabs = true
+        keyboard?.hide()
+        listFocus.requestFocus()
+    }
     var recentIndex by remember { mutableIntStateOf(0) }
     val showingHistory=state.submittedQuery.isBlank()
     var pressedRecent by remember { mutableStateOf<String?>(null) }
@@ -155,12 +169,12 @@ private data class SearchEntry(val key:String,val channel:Channel,val programme:
         }
     }
     fun focusResults(){keyboard?.hide();state.returnToResults=true;listFocus.requestFocus()}
-    fun submitSearch(){state.submit();onRememberQuery(state.submittedQuery);focusResults()}
+    fun submitSearch(){state.submit();onTabs=state.submittedQuery.isNotBlank();onRememberQuery(state.submittedQuery);focusResults()}
     fun moveToResults(){
         if(if(showingHistory)state.recentQueries.isNotEmpty()else entries.isNotEmpty())focusResults()
     }
     fun choose(index:Int){
-        if(index==entries.size && results.hasNextPage)state.selectedKey="search-more"
+        if(index==entries.size && canAppend)state.selectedKey="search-more"
         else entries.getOrNull(index)?.let{state.selectedKey=it.key}
     }
     fun repeatQuery(query:String){state.query=query;submitSearch()}
@@ -172,13 +186,13 @@ private data class SearchEntry(val key:String,val channel:Channel,val programme:
     LaunchedEffect(selected?.key){selected?.let{onSelected(it.channel,it.programme)}}
     LaunchedEffect(selected?.key,moreSelected,results) {
         if(moreSelected){
-            list.scrollToItem(entries.size+1+if(results.channels.isEmpty())0 else 1)
+            list.scrollToItem(entries.size+1)
         }else if(selected!=null) {
             state.selectedKey=selected.key
-            val row=index+(if(results.channels.isNotEmpty())1 else 0)+(if(selected.programme!=null)1 else 0)
+            val row=index+1
             val layout=list.layoutInfo
             val item=layout.visibleItemsInfo.firstOrNull{it.index==row}
-            val firstInSection=index==0||index==results.channels.size
+            val firstInSection=index==0
             val headerHeight=layout.visibleItemsInfo.firstOrNull { it.key=="channels-heading"||it.key=="programmes-heading" }?.size?:0
             if(firstInSection)list.scrollToItem(row-1)
             else if(index==entries.lastIndex && !results.hasNextPage && selected.programme!=null)list.scrollToItem(row+1)
@@ -234,11 +248,18 @@ private data class SearchEntry(val key:String,val channel:Channel,val programme:
                                 pressedRecent=null
                                 val step=if(key.keyCode==KeyEvent.KEYCODE_DPAD_DOWN)1 else -1
                                 if(showingHistory)recentIndex=(recentIndex+step).coerceIn(0,(state.recentQueries.size-1).coerceAtLeast(0))
-                                else choose((index+step).coerceIn(0,if(results.hasNextPage)entries.size else entries.lastIndex.coerceAtLeast(0)))
+                                else if(onTabs) {
+                                    if(step>0 && entries.isNotEmpty()) onTabs=false
+                                } else if(index==0 && step<0) onTabs=true
+                                else choose((index+step).coerceIn(0,if(canAppend)entries.size else entries.lastIndex.coerceAtLeast(0)))
                             };true
                         }
-                        KeyEvent.KEYCODE_DPAD_LEFT->{if(key.action==KeyEvent.ACTION_DOWN)inputFocus.requestFocus();true}
-                        KeyEvent.KEYCODE_DPAD_RIGHT->{if(key.action==KeyEvent.ACTION_DOWN&&selected!=null)detailFocus.requestFocus();true}
+                        KeyEvent.KEYCODE_DPAD_LEFT->{if(key.action==KeyEvent.ACTION_DOWN){
+                            if(onTabs && !showingHistory && programmesTab) selectTab(false) else inputFocus.requestFocus()
+                        };true}
+                        KeyEvent.KEYCODE_DPAD_RIGHT->{if(key.action==KeyEvent.ACTION_DOWN){
+                            if(onTabs && !showingHistory) selectTab(true) else if(selected!=null)detailFocus.requestFocus()
+                        };true}
                         KeyEvent.KEYCODE_DPAD_CENTER,KeyEvent.KEYCODE_ENTER->{
                             if(showingHistory){
                                 when(key.action){
@@ -255,6 +276,8 @@ private data class SearchEntry(val key:String,val channel:Channel,val programme:
                                         pressedRecent=null
                                     }
                                 }
+                            }else if(onTabs){
+                                if(key.action==KeyEvent.ACTION_UP && !key.isCanceled && entries.isNotEmpty()) onTabs=false
                             }else if(moreSelected){
                                 if(key.action==KeyEvent.ACTION_UP && !key.isCanceled)open()
                             }else reminderPress.handle(key,{open()},{
@@ -265,6 +288,23 @@ private data class SearchEntry(val key:String,val channel:Channel,val programme:
                         else->false
                     }
                 }.focusable(),verticalArrangement=Arrangement.spacedBy(T.small)) {
+                if(!showingHistory) {
+                    Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(T.tiny)) {
+                        for(programmes in listOf(false,true)) {
+                            val active = programmes == programmesTab
+                            val focused = active && resultsFocused && onTabs
+                            val label = if(programmes) tr("search_programmes_tab") else tr("search_channels_count",results.channels.size)
+                            Box(Modifier.weight(1f).testTag(if(programmes)"search-tab-programmes" else "search-tab-channels")
+                                .background(if(focused)T.accent else if(active)T.raised else T.surface,RoundedCornerShape(T.radius))
+                                .border(T.focusLine,if(focused)T.text else if(active)T.inputBorder else Color.Transparent,RoundedCornerShape(T.radius))
+                                .semantics{this.selected=active;this.focused=focused}
+                                .focusProperties{canFocus=false}.clickable{selectTab(programmes)}
+                                .heightIn(min=T.actionHeight).padding(horizontal=T.small,vertical=T.tiny),contentAlignment=Alignment.CenterStart){
+                                Text(label,color=if(focused)T.onAccent else T.text,fontSize=T.caption,maxLines=2)
+                            }
+                        }
+                    }
+                }
                 if(loading){
                     Text(tr("search_loading"),color=T.muted,fontSize=T.micro)
                     LinearProgressIndicator(Modifier.fillMaxWidth(),color=T.accent,trackColor=T.border)
@@ -282,31 +322,31 @@ private data class SearchEntry(val key:String,val channel:Channel,val programme:
                             }
                         }
                     }
-                    if(results.channels.isNotEmpty())stickyHeader(key="channels-heading"){SearchHeading(tr("search_channels_count",results.channels.size),"search-channels-heading")}
-                    itemsIndexed(results.channels,key={_,c->"channel:${c.id}"}){i,c->
-                        SearchRow("channel:${c.id}",c.name,resultsFocused&&index==i,
-                            logo={logo(c,if(resultsFocused&&index==i)T.onAccent else T.text)}){choose(i);focusResults();onOpen(c,null)}
+                    if(!programmesTab && results.channels.isNotEmpty())stickyHeader(key="channels-heading"){SearchHeading(tr("search_channels_count",results.channels.size),"search-channels-heading")}
+                    if(!programmesTab)itemsIndexed(results.channels,key={_,c->"channel:${c.id}"}){i,c->
+                        SearchRow("channel:${c.id}",c.name,resultsFocused&&!onTabs&&index==i,
+                            logo={logo(c,if(resultsFocused&&!onTabs&&index==i)T.onAccent else T.text)}){onTabs=false;choose(i);focusResults();onOpen(c,null)}
                     }
-                    if(results.programmes.isNotEmpty())stickyHeader(key="programmes-heading"){
+                    if(programmesTab && results.programmes.isNotEmpty())stickyHeader(key="programmes-heading"){
                         SearchHeading(tr("search_programmes_shown",results.programmes.size),"search-programmes-heading")
                     }
-                    itemsIndexed(results.programmes,key={_,p->p.key}){i,p->
-                        val selectedIndex=i+results.channels.size
-                        SearchRow(p.key,p.programme.title,resultsFocused&&index==selectedIndex,
-                            logo={logo(p.channel,if(resultsFocused&&index==selectedIndex)T.onAccent else T.text)}){choose(selectedIndex);focusResults();onOpen(p.channel,p.programme)}
+                    if(programmesTab)itemsIndexed(results.programmes,key={_,p->p.key}){i,p->
+                        val selectedIndex=i
+                        SearchRow(p.key,p.programme.title,resultsFocused&&!onTabs&&index==selectedIndex,
+                            logo={logo(p.channel,if(resultsFocused&&!onTabs&&index==selectedIndex)T.onAccent else T.text)}){onTabs=false;choose(selectedIndex);focusResults();onOpen(p.channel,p.programme)}
                     }
-                    if(results.hasNextPage)item(key="search-more"){
+                    if(canAppend)item(key="search-more"){
                         val focused=moreSelected && resultsFocused
                         Box(Modifier.fillMaxWidth().testTag("search-more")
                             .background(if(focused)T.accent else T.surface,RoundedCornerShape(T.radius))
                             .border(T.focusLine,if(focused)T.text else T.border,RoundedCornerShape(T.radius))
                             .semantics{this.selected=focused;this.focused=focused}.focusProperties{canFocus=false}
-                            .clickable(enabled=!loading){focusResults();state.selectedKey="search-more";state.requestMore()}
+                            .clickable(enabled=!loading){onTabs=false;focusResults();state.selectedKey="search-more";state.requestMore()}
                             .heightIn(min=T.actionHeight).padding(T.small),contentAlignment=Alignment.Center){
                             Text(tr("search_next_page"),color=if(focused)T.onAccent else T.text,fontSize=T.caption)
                         }
                     }
-                    else if(results.programmes.isNotEmpty())item(key="search-end"){
+                    else if(programmesTab && results.programmes.isNotEmpty())item(key="search-end"){
                         Text(tr("search_end"),Modifier.testTag("search-end").padding(T.small),color=T.muted,fontSize=T.micro)
                     }
                     if(!hasEpg&&state.submittedQuery.isNotBlank())item(key="no-epg"){Text(tr("search_no_epg"),color=T.muted,fontSize=T.micro)}

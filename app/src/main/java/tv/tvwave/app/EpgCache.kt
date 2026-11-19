@@ -185,6 +185,15 @@ object EpgCache {
         return before.asReversed()+after
     }
 
+    /** Look up the on-air or next retained listing before the user binds a playlist channel. */
+    fun candidateProgramme(db:SQLiteDatabase,binding:EpgBinding,time:Long,offsetMinutes:Int):Programme? {
+        val offset=offsetMinutes*60_000L
+        fun first(condition:String,order:String):Programme? = db.rawQuery(
+            "SELECT start,end,title FROM guide_programme WHERE source=? AND epg=? AND $condition ORDER BY start $order LIMIT 1",
+            arrayOf(binding.source,binding.channel,(time-offset).toString())
+        ).use { c -> if(c.moveToFirst())Programme(binding.channel,c.getLong(0)+offset,c.getLong(1)+offset,c.getString(2),"") else null }
+        return first("start<=?","DESC")?.takeIf{it.end>time} ?: first("start>?","ASC")
+    }
     fun hasSchedule(db:SQLiteDatabase,channel:String,oldest:Long,offsetMinutes:Int):Boolean =
         db.rawQuery("""SELECT 1 FROM guide_link m JOIN guide_programme p
             ON p.source=m.source AND p.epg=m.epg WHERE m.channel=? AND p.end>? LIMIT 1""",

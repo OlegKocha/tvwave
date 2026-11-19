@@ -45,6 +45,7 @@ appId: tv.tvwave.app.debug
 - assertVisible:
     id: search-results
     focused: true
+- pressKey: Remote Dpad Down
 - pressKey: Remote Dpad Center
 - assertVisible: 'Все каналы · 16'
 - pressKey: back
