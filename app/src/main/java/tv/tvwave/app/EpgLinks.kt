@@ -1,10 +1,16 @@
 package tv.tvwave.app
 
 object EpgLinks {
+    private fun eligibleChannels(state:AppState,source:String) =
+        state.playlists.filter { playlist ->
+            val selected = state.playlistEpgSources[playlist.id]
+            selected == null || selected == source
+        }.flatMap { it.channels }
+
     /** Keep matching schedules in every eligible source so reordering is immediate.
      * Explicit matches may point to a channel with a completely different name. */
     fun needed(state:AppState,source:String,catalog:List<EpgChannel>):Set<String> {
-        val channels=state.playlists.filter{state.playlistEpgSources[it.id].let{chosen->chosen==null||chosen==source}}.flatMap{it.channels}
+        val channels=eligibleChannels(state,source)
         val wanted=Epg.match(channels,catalog).values.toMutableSet()
         val ids=state.channels.map{it.id}.toSet()
         val available=catalog.map{it.id}.toSet()
@@ -12,14 +18,23 @@ object EpgLinks {
         return wanted
     }
     fun resolve(state:AppState,catalogs:Map<String,List<EpgChannel>>):Map<String,EpgBinding> {
-        val result=mutableMapOf<String,EpgBinding>()
-        for(source in state.sources){
-            for((id,epg) in Epg.match(state.playlists.filter{state.playlistEpgSources[it.id].let{chosen->chosen==null||chosen==source.id}}.flatMap{it.channels},catalogs[source.id].orEmpty()))result.getOrPut(id){EpgBinding(source.id,epg)}
+        return ranked(state,catalogs).mapValues { it.value.first() }
+    }
+
+    fun ranked(state:AppState,catalogs:Map<String,List<EpgChannel>>):Map<String,List<EpgBinding>> {
+        val result=mutableMapOf<String,MutableList<EpgBinding>>()
+        for(source in state.sources) {
+            val matches=Epg.match(eligibleChannels(state,source.id),catalogs[source.id].orEmpty())
+            for((id,epg) in matches) {
+                result.getOrPut(id) { mutableListOf() }.add(EpgBinding(source.id,epg))
+            }
         }
-        val ids=state.channels.map{it.id}.toSet()
-        for((id,b) in state.epgBindings)if(id in ids){
-            result.remove(id)
-            if(catalogs[b.source].orEmpty().any{it.id==b.channel})result[id]=b
+        val ids=state.channels.mapTo(mutableSetOf()) { it.id }
+        for((id,binding) in state.epgBindings) {
+            if(id !in ids)continue
+            if(catalogs[binding.source].orEmpty().any { it.id==binding.channel }) {
+                result[id]=mutableListOf(binding)
+            } else result.remove(id)
         }
         return result
     }

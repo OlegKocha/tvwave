@@ -158,6 +158,18 @@ class TvNavigationTest {
                 epgAutoUpdate=false))
         }
     }
+    @Test fun seedMergedGuideForMaestro(){
+        TvFixture.seed()
+        val anchor=System.currentTimeMillis()/1000
+        val base="http://10.0.2.2:8765/merged-guide"
+        Repository(ctx).use { repo ->
+            repo.save(repo.load().copy(epgSources=listOf(
+                legacyEpgSource("$base/priority.xml?at=$anchor").copy(name="Priority"),
+                legacyEpgSource("$base/fallback.xml?at=$anchor").copy(name="Fallback")
+            ),epgAutoUpdate=false))
+            assertEquals(listOf("Priority","Fallback"),repo.load().sources.map { it.name })
+        }
+    }
     @Test fun stageImportForMaestro(){
         check(ctx.packageName=="tv.tvwave.app.debug")
         check(android.os.Build.FINGERPRINT.contains("generic") || android.os.Build.MODEL.contains("sdk"))

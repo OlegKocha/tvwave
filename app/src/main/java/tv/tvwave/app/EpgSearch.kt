@@ -51,8 +51,7 @@ object EpgSearch {
                                  after:ProgrammeMatch?,channels:List<Channel>,checkCancelled:()->Unit):GuideSearchResults {
         val term=normalize(query)
         if(term.isEmpty())return GuideSearchResults()
-        val links = EpgCache.links(db)
-        val owners = state.channels.distinctBy { it.id }.filter { it.id in links }.groupBy { links.getValue(it.id) }
+        val (owners,extra) = EpgMerge.searchOwners(db,state.channels.associateBy { it.id })
         if (owners.isEmpty()) return GuideSearchResults(channels)
         fun shift(channel: Channel) = (state.epgOffsets[channel.id] ?: 0) * 60000L
         val shifts = owners.values.flatten().map(::shift)
@@ -95,7 +94,10 @@ object EpgSearch {
                     }) continue
                     val binding = EpgBinding(cursor.getString(2), cursor.getString(3))
                     val rawEnd = cursor.getLong(4)
-                    for (channel in owners[binding].orEmpty()) {
+                    val secondary = extra[binding].orEmpty()
+                    val primary = owners[binding].orEmpty()
+                    val visible = if(secondary.isEmpty()) primary else primary + secondary.mapNotNull { it.channelAt(rawStart) }
+                    for (channel in visible) {
                         val offset = shift(channel)
                         if (rawEnd + offset <= oldest) continue
                         val programme = Programme(binding.channel, rawStart + offset, rawEnd + offset, title)

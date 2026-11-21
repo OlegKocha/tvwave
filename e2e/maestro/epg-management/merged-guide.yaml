@@ -1,0 +1,41 @@
+appId: tv.tvwave.app.debug
+---
+- runFlow: ../playlist-refresh/epg-all.yaml
+- extendedWaitUntil:
+    visible: "(?s)Fallback · 2/2.*100%.*"
+    timeout: 30000
+- launchApp
+- assertVisible:
+    id: guide-brand
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Up
+- assertVisible:
+    id: guide-programme-title
+    text: MergeCheck primary
+- pressKey: Remote Dpad Right
+- pressKey: Remote Dpad Right
+- assertVisible:
+    id: guide-programme-title
+    text: MergeCheck day six
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: details-description
+    text: MergeCheck day six details
+- launchApp
+- assertVisible:
+    id: guide-brand
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Left
+- pressKey: Remote Dpad Left
+- pressKey: Remote Dpad Up
+- pressKey: Remote Dpad Center
+- pressKey: Remote Dpad Center
+- inputText: MergeCheck
+- pressKey: Enter
+- assertVisible: "Передачи · показано 2"
+- assertVisible:
+    id: search-detail-title
+    text: MergeCheck day six
+- assertVisible: "MergeCheck primary"
+- assertNotVisible: "MergeCheck superseded"
+- takeScreenshot: merged-guide-day-six

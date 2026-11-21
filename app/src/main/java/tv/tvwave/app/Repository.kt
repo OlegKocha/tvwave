@@ -17,9 +17,16 @@ import javax.crypto.spec.GCMParameterSpec
 
 /** Encrypted configuration plus a small encrypted viewing snapshot; full saves replace both atomically.
  * Keystore never participates in portable backup encryption. All calls run off UI thread. */
-class Repository(context: Context) : SQLiteOpenHelper(context,"tvwave.db",null,11) {
+class Repository(context: Context) : SQLiteOpenHelper(context,"tvwave.db",null,13) {
     override fun onCreate(db: SQLiteDatabase) { db.execSQL("CREATE TABLE state (id INTEGER PRIMARY KEY, payload BLOB NOT NULL)");EpgCache.create(db);CacheMaintenance.create(db);createViewing(db) }
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) { EpgCache.migrate(db);CacheMaintenance.create(db);createViewing(db);if(oldVersion<4)db.execSQL("UPDATE guide_meta SET updated=0") }
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        EpgCache.migrate(db)
+        CacheMaintenance.create(db)
+        createViewing(db)
+        if(oldVersion<4)db.execSQL("UPDATE guide_meta SET updated=0")
+        // The old cache already contains secondary schedules. Reuse them on first load.
+        if(oldVersion<12)db.execSQL("INSERT OR REPLACE INTO epg_storage_policy VALUES (2)")
+    }
     private val schedules=ScheduleMemoryCache()
     private fun createViewing(db:SQLiteDatabase){db.execSQL("CREATE TABLE IF NOT EXISTS viewing_state (id INTEGER PRIMARY KEY,payload BLOB NOT NULL)")}
     private fun encrypt(plain:ByteArray):ByteArray {
@@ -41,8 +48,8 @@ class Repository(context: Context) : SQLiteOpenHelper(context,"tvwave.db",null,1
     }
     @Synchronized fun saveViewing(last:String,history:List<String>){writeViewing(writableDatabase,last,history)}
     @Synchronized fun invalidateSchedules(){schedules.clear()}
-    @Synchronized fun installEpg(file:File,source:EpgSource,state:AppState){
-        EpgCache.install(writableDatabase,file,source,state);schedules.clear()
+    @Synchronized internal fun installEpg(file:File,source:EpgSource,state:AppState,imported:ImportedEpg?=null){
+        EpgCache.install(writableDatabase,file,source,state,imported);schedules.clear()
     }
     @Synchronized fun schedule(channel:String,from:Long,to:Long,limit:Int=300,offsetMinutes:Int=0):List<Programme> =
         schedules.get(channel,from,to,limit,offsetMinutes){start,end,count->EpgCache.schedule(readableDatabase,channel,start,end,count,offsetMinutes)}
@@ -62,6 +69,18 @@ class Repository(context: Context) : SQLiteOpenHelper(context,"tvwave.db",null,1
         return generator.generateKey()
     }
     @Synchronized fun load(): AppState {
+        val db=writableDatabase
+        val pending=db.rawQuery("SELECT 1 FROM epg_storage_policy WHERE id=2",null).use { it.moveToFirst() }
+        if(!pending)return readState()
+        db.beginTransaction()
+        try {
+            val state=readState()
+            if(db.delete("epg_storage_policy","id=2",null)>0)EpgCache.rebind(db,state)
+            db.setTransactionSuccessful()
+            return state
+        } finally { db.endTransaction() }
+    }
+    private fun readState(): AppState {
         readableDatabase.rawQuery("SELECT id,payload FROM state ORDER BY id",null).use { cursor ->
             if (!cursor.moveToFirst()) return AppState()
             val output = java.io.ByteArrayOutputStream();var index=0

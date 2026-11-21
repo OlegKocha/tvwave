@@ -33,6 +33,19 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_response(200);self.send_header('Content-Type',kind);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body[:100000]);self.close_connection=True;return
         elif path=='/playlist.m3u8':
             body=('#EXTM3U\n'+''.join(f'#EXTINF:-1 tvg-id="test{i}" group-title="Тестовые",Тестовый канал {i}\nhttp://10.0.2.2:8765/video.mp4\n' for i in range(1,17))).encode();kind='audio/x-mpegurl'
+        elif path in ('/merged-guide/priority.xml', '/merged-guide/fallback.xml'):
+            anchor = datetime.fromtimestamp(int(parse_qs(urlsplit(self.path).query)['at'][0]), timezone.utc)
+            live = anchor - timedelta(minutes=15)
+            entries = [(live, 'MergeCheck primary')] if path.endswith('/priority.xml') else [
+                (live, 'MergeCheck superseded'), (anchor + timedelta(days=6), 'MergeCheck day six')]
+            rows = []
+            for start, title in entries:
+                stop = start + timedelta(hours=1)
+                rows.append(f'<programme channel="test1" start="{start:%Y%m%d%H%M%S %z}" stop="{stop:%Y%m%d%H%M%S %z}">'
+                            f'<title>{title}</title><desc>{title} details</desc></programme>')
+            body = ('<tv><channel id="test1"><display-name>Тестовый канал 1</display-name></channel>'
+                    + ''.join(rows) + '</tv>').encode()
+            kind = 'application/xml'
         elif path.startswith('/epg/') and path.endswith(('.xml','.xml.gz')):
             day=parse_qs(urlsplit(self.path).query).get('dayStart',[None])[0]
             try:now=datetime.fromtimestamp(int(day)/1000,timezone.utc)+timedelta(hours=12) if day is not None else datetime.now(timezone.utc)

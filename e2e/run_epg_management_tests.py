@@ -2,7 +2,7 @@
 """Targeted EPG/portable backup QA; emulator and synthetic data only."""
 from pathlib import Path
 import argparse,subprocess,json,gzip,hashlib,struct
-p=argparse.ArgumentParser();p.add_argument('--output',required=True);p.add_argument('--flow',choices=['all','management','assignment','backup','maintenance'],default='all');a=p.parse_args()
+p=argparse.ArgumentParser();p.add_argument('--output',required=True);p.add_argument('--flow',choices=['all','management','assignment','backup','maintenance','merged-guide'],default='all');a=p.parse_args()
 project=Path(__file__).resolve().parents[1];root=project.parents[2];out=Path(a.output).resolve();out.mkdir(parents=True,exist_ok=True)
 adb=[str(root/'work/android-tools/sdk/platform-tools/adb'),'-s','emulator-5556'];results=[]
 def shell(*args):return subprocess.run(adb+list(args),check=True,capture_output=True)
@@ -18,6 +18,9 @@ def flow(name,file=None,env=None):
  r=subprocess.run(cmd,capture_output=True,timeout=240);(out/(name+'.log')).write_bytes(r.stdout+r.stderr)
  results.append({'case':name,'passed':r.returncode==0});(out/'results.json').write_text(json.dumps(results,indent=2));print(name,r.returncode,flush=True)
  assert r.returncode==0
+if a.flow in ['all','merged-guide']:
+ native('seedMergedGuideForMaestro','TvNavigationTest')
+ flow('merged-guide')
 if a.flow in ['all','management','maintenance']:
  for name in ['weeklyCleanupPersistsAndPreservesConfigurationCataloguesAndOverlap','failedCleanupRollsBackAndIsRetried','manualTimeCorrectionPreservesTheDisplayedBoundary','compactionReturnsRealDiskSpaceAndSkipsLowStorage','onlyAbandonedKnownTemporaryFilesAreRemoved','upgradeV5PreservesSettingsAndBackup']:
   native(name,'CacheMaintenanceTest')

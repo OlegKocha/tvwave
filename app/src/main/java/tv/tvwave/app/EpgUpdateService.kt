@@ -13,11 +13,11 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import okhttp3.OkHttpClient
-import okhttp3.Request
 import org.json.JSONArray
 import java.io.File
 import java.security.MessageDigest
@@ -63,7 +63,7 @@ class EpgUpdateService:Service(){
             try {
                 prefs(c).edit().putString("queue","[]").commit()
                 val service=instance
-                service?.activeCall?.cancel();service?.job?.cancelAndJoin()
+                service?.job?.cancel();service?.downloader?.cancel();service?.job?.join()
                 service?.stopSelf()
                 withContext(Dispatchers.IO){File(c.filesDir,"epg-work").deleteRecursively()}
                 mutable.value=mutable.value.copy(running=false,sourceId="",status=tr("update_cancelled"),failures=emptyMap())
@@ -71,11 +71,11 @@ class EpgUpdateService:Service(){
         }
     }
     private val scope=CoroutineScope(SupervisorJob()+Dispatchers.Main.immediate)
-    private val worker=Executors.newSingleThreadExecutor { task->Thread({Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND);task.run()},"TVWave-EPG") }.asCoroutineDispatcher()
+    private val worker=Executors.newFixedThreadPool(2) { task->Thread({Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND);task.run()},"TVWave-EPG") }.asCoroutineDispatcher()
     private var job:Job?=null
-    @Volatile private var activeCall:okhttp3.Call?=null
     private var wake:PowerManager.WakeLock?=null
     private val client=OkHttpClient.Builder().connectTimeout(20,TimeUnit.SECONDS).readTimeout(45,TimeUnit.SECONDS).callTimeout(12,TimeUnit.MINUTES).build()
+    private val downloader=EpgDownload(client)
     override fun onBind(intent:Intent?):IBinder?=null
     override fun onCreate(){
         super.onCreate();instance=this
@@ -101,7 +101,7 @@ class EpgUpdateService:Service(){
                 catch(_:CancellationException){}
                 catch(e:Exception){logFailure("queue",e);mutable.value=mutable.value.copy(status=tr("could_not_resume_the_update_open_the_app_and_try_again"))}
                 finally{
-                    activeCall?.cancel();activeCall=null
+                    downloader.cancel()
                     wake?.let{if(it.isHeld)it.release()};wake=null
                     mutable.value=mutable.value.copy(running=false,sourceId="")
                     if(Build.VERSION.SDK_INT>=24)stopForeground(STOP_FOREGROUND_REMOVE)else @Suppress("DEPRECATION") stopForeground(true)
@@ -113,7 +113,7 @@ class EpgUpdateService:Service(){
     }
     private var notified=0L
     private fun progress(source:EpgSource,text:String){
-        mutable.value=mutable.value.copy(running=true,sourceId=source.id,status=text)
+        mutable.update { it.copy(running=true,sourceId=source.id,status=text) }
         if(SystemClock.elapsedRealtime()-notified>1000){notified=SystemClock.elapsedRealtime();getSystemService(NotificationManager::class.java).notify(NOTIFICATION,notification(text))}
     }
     private class SelectionChanged:Exception()
@@ -151,7 +151,7 @@ class EpgUpdateService:Service(){
                 CacheMaintenance.cleanAbandonedFiles(cacheDir,System.currentTimeMillis())
                 stateLock.withLock {
                     Repository(this@EpgUpdateService).use { repo->
-                        if(repo.maintain(repo.load(),force=true))
+                        if(repo.maintain(repo.load()))
                             mutable.value=mutable.value.copy(revision=mutable.value.revision+1)
                     }
                 }
@@ -164,92 +164,158 @@ class EpgUpdateService:Service(){
         val began=SystemClock.elapsedRealtime()
         refreshPlaylists()
         if(pending(this).isNotEmpty())maintainBeforeUpdate()
-        var pruned=false
+        val dir=File(filesDir,"epg-work").apply{mkdirs()}
         var completed=0
+        var cleanWork=true
         while(pending(this).isNotEmpty()){
             if(SystemClock.elapsedRealtime()-began>50*60*1000L){mutable.value=mutable.value.copy(status=tr("update_paused_it_will_resume_the_next_time_you_open_the_app"));break}
-            val id=pending(this).first()
             val snapshot=withContext(worker){stateLock.withLock{Repository(this@EpgUpdateService).use{it.load()}}}
-            val source=snapshot.sources.firstOrNull{it.id==id}
-            if(source==null){removePending(id);continue}
-            mutable.value=mutable.value.copy(failures=mutable.value.failures-source.id)
-            val label="${source.name.take(24)} · ${completed+1}/${completed+pending(this).size}"
-            val key=MessageDigest.getInstance("SHA-256").digest((source.id+"\n"+source.url).toByteArray()).joinToString(""){"%02x".format(it)}
-            val dir=File(filesDir,"epg-work").apply{mkdirs()}
-            val downloaded=File(dir,"${key}.complete");val partial=File(dir,"${key}.partial");val staged=File(dir,"${key}.db")
-            var retrySelection=false
-            try{
-                val context=currentCoroutineContext()
-                val result=withContext(worker){
-                    if(!pruned){
-                        val valid=snapshot.sources.map{entry->MessageDigest.getInstance("SHA-256").digest((entry.id+"\n"+entry.url).toByteArray()).joinToString(""){"%02x".format(it)}+".complete"}.toSet()
-                        dir.listFiles()?.filter{it.name !in valid||System.currentTimeMillis()-it.lastModified()>24*3600000L}?.forEach{it.delete()}
-                        pruned=true
-                    }
-                    if(downloaded.exists()&&System.currentTimeMillis()-downloaded.lastModified()>24*3600000L)downloaded.delete()
-                    if(!downloaded.exists()){
-                        progress(source,tr("connecting", label))
-                        val call=client.newCall(Request.Builder().url(source.url).build());activeCall=call
-                        try{call.execute().use{response->
-                            if(!response.isSuccessful)throw UserError(tr("the_epg_source_returned_http", response.code))
-                            val body=response.body?:throw UserError(tr("empty_epg_response"))
-                            if(body.contentLength()>Epg.MAX_COMPRESSED)throw UserError(tr("the_epg_source_exceeds_128_mb"))
-                            var total=0L;var report=0L
-                            body.byteStream().use{input->partial.outputStream().use{out->val buffer=ByteArray(65536)
-                                while(true){context.ensureActive();val count=input.read(buffer);if(count<0)break;total+=count
-                                    if(total>Epg.MAX_COMPRESSED)throw UserError(tr("the_epg_source_exceeds_128_mb"))
-                                    out.write(buffer,0,count)
-                                    if(SystemClock.elapsedRealtime()-report>1000){report=SystemClock.elapsedRealtime();progress(source,"${label}\n${EpgProgress.downloading(total,body.contentLength())}")}
-                                };out.fd.sync()
-                            }}
-                            check(partial.renameTo(downloaded)){"Cannot preserve EPG download"}
-                        }}finally{activeCall=null;partial.delete()}
-                    }else progress(source,tr("resuming_processing_of_the_downloaded_file", label))
-                    context.ensureActive()
-                    Epg.Bounded(downloaded.inputStream(),Epg.MAX_COMPRESSED).use{input->
-                        EpgCache.stage(staged,input,snapshot.channels,source,System.currentTimeMillis(),progress={count->
-                            context.ensureActive();progress(source,"${label}\n${EpgProgress.processing(count,input.count,downloaded.length())}")
-                        },oldest=EpgRetention.storageCutoff(System.currentTimeMillis(),snapshot.epgOffsets.values),state=snapshot)
-                    }
+            if(cleanWork){
+                withContext(worker){
+                    val valid=snapshot.sources.map{workKey(it)+".complete"}.toSet()
+                    dir.listFiles()?.filter{it.name !in valid || expired(it)}?.forEach{it.delete()}
                 }
-                currentCoroutineContext().ensureActive()
-                progress(source,tr("saving", label))
-                withContext(worker){stateLock.withLock{
-                    Repository(this@EpgUpdateService).use{repo->
-                        val latest=repo.load()
-                        if(latest.sources.none{it.id==source.id&&it.url==source.url})throw UserError(tr("the_source_has_changed_update_it_again"))
-                        // A binding or playlist can change while the XML is being read.
-                        // Reuse the completed download if the new selection needs more rows.
-                        android.database.sqlite.SQLiteDatabase.openDatabase(staged.path,null,android.database.sqlite.SQLiteDatabase.OPEN_READONLY).use{db->
-                            val catalog=EpgCache.catalog(db,source.id)
-                            if(!EpgLinks.needed(snapshot,source.id,catalog).containsAll(EpgLinks.needed(latest,source.id,catalog)))throw SelectionChanged()
-                        }
-                        repo.installEpg(staged,source,latest)
-                    }
-                }}
-                mutable.value=mutable.value.copy(revision=mutable.value.revision+1,status=tr("100_updated_programmes", label, result.programmes))
-                android.util.Log.i("TVWaveEPG","source installed programmes=${result.programmes}")
-            }catch(_:SelectionChanged){
-                retrySelection=true
-            }catch(e:Exception){
-                if(!currentCoroutineContext().isActive)throw CancellationException()
-                logFailure("source",e)
-                val error=if(e is UserError)e.message.orEmpty()else tr("could_not_update_the_guide_check_your_connection_and_available_storage")
-                mutable.value=mutable.value.copy(failures=mutable.value.failures+(source.id to error),status="${label} · ${error}")
-            }finally{
-                withContext(NonCancellable+worker){android.database.sqlite.SQLiteDatabase.deleteDatabase(staged);partial.delete()}
+                cleanWork=false
             }
-            if(retrySelection)continue
-            // Retain a complete download only while work is pending (process death / interruption).
-            withContext(worker){downloaded.delete()};removePending(id);completed++
+            val queue=pending(this)
+            val total=completed+queue.size
+            val batch=queue.take(if(parallelImportAvailable(dir))2 else 1)
+            // Each parser writes a private staging DB. Only commits and UI progress follow queue order.
+            coroutineScope {
+                var previous:Deferred<Boolean>?=null
+                val tasks=batch.mapIndexed { index,id ->
+                    val turn=previous
+                    async {
+                        val source=snapshot.sources.firstOrNull{it.id==id}
+                        if(source==null){removePending(id);true}
+                        else runSource(source,snapshot,"${source.name.take(24)} · ${completed+index+1}/$total",dir,turn)
+                    }.also { previous=it }
+                }
+                completed+=tasks.awaitAll().count{it}
+            }
         }
-        if(pending(this).isEmpty())File(filesDir,"epg-work").delete()
+        if(pending(this).isEmpty())dir.delete()
     }
+
+    private fun parallelImportAvailable(dir:File):Boolean {
+        val manager=getSystemService(ACTIVITY_SERVICE) as ActivityManager
+        return !manager.isLowRamDevice && manager.memoryClass>=192 && Runtime.getRuntime().availableProcessors()>=2 &&
+            dir.usableSpace>2*Epg.MAX_XML &&
+            !ActivityManager.MemoryInfo().also{manager.getMemoryInfo(it)}.lowMemory
+    }
+    private fun workKey(source:EpgSource)=MessageDigest.getInstance("SHA-256")
+        .digest((source.id+"\n"+source.url).toByteArray()).toHex()
+    private fun expired(file:File)=System.currentTimeMillis()-file.lastModified()>24*3600000L
+
+    private suspend fun runSource(source:EpgSource,snapshot:AppState,label:String,dir:File,previous:Deferred<Boolean>?):Boolean {
+        val key=workKey(source)
+        val downloaded=File(dir,"$key.complete")
+        val partial=File(dir,"$key.partial")
+        val staged=File(dir,"$key.db")
+        mutable.update { it.copy(failures=it.failures-source.id) }
+        try {
+            val result=withContext(worker){
+                if(downloaded.exists()&&expired(downloaded))downloaded.delete()
+                updateSource(source,snapshot,label,downloaded,partial,staged,previous)
+            }
+            val status=if(result==null)tr("guide_already_current",label) else tr("100_updated_programmes",label,result)
+            mutable.update { it.copy(revision=it.revision+1,status=status) }
+        }catch(_:SelectionChanged){
+            return false // Retry with the completed download and the new selection.
+        }catch(e:Exception){
+            currentCoroutineContext().ensureActive()
+            previous?.await()
+            logFailure("source",e)
+            val error=if(e is UserError)e.message.orEmpty()else tr("could_not_update_the_guide_check_your_connection_and_available_storage")
+            mutable.update { it.copy(failures=it.failures+(source.id to error),status="$label · $error") }
+        }finally{
+            withContext(NonCancellable+worker){android.database.sqlite.SQLiteDatabase.deleteDatabase(staged);partial.delete()}
+        }
+        withContext(worker){downloaded.delete()}
+        removePending(source.id)
+        return true
+    }
+
+    private suspend fun updateSource(source:EpgSource,snapshot:AppState,label:String,downloaded:File,partial:File,staged:File,
+                                     previous:Deferred<Boolean>?):Int? {
+        fun report(text:String){if(previous==null || previous.isCompleted)progress(source,text)}
+        suspend fun awaitTurn(){if(previous?.await()==false)throw SelectionChanged()}
+        val context=currentCoroutineContext()
+        val now=System.currentTimeMillis()
+        val oldest=EpgRetention.storageCutoff(now,snapshot.epgOffsets.values)
+        val selection=EpgHttpCache.selection(snapshot,source.id)
+        val cached=stateLock.withLock { Repository(this).use {
+            EpgHttpCache.read(it.readableDatabase,source,selection,oldest)
+        } }
+        val started=SystemClock.elapsedRealtime()
+        val version=if(downloaded.exists()) {
+            report(tr("resuming_processing_of_the_downloaded_file",label))
+            null
+        } else {
+            report(tr("connecting",label))
+            var reported=0L
+            downloader.fetch(source,cached?.version,partial,downloaded,context) { bytes,total ->
+                val time=SystemClock.elapsedRealtime()
+                if(time-reported>1000) {
+                    reported=time
+                    report("${label}\n${EpgProgress.downloading(bytes,total)}")
+                }
+            }
+        }
+        val fetched=SystemClock.elapsedRealtime()
+        if(version!=null && cached!=null && version.digest==cached.version.digest) {
+            awaitTurn()
+            stateLock.withLock { Repository(this).use { repo ->
+                val db=repo.writableDatabase
+                db.beginTransaction()
+                try {
+                    val latest=repo.load()
+                    if(sourceMissing(latest,source))throw UserError(tr("the_source_has_changed_update_it_again"))
+                    val current=EpgHttpCache.read(db,source,EpgHttpCache.selection(latest,source.id),
+                        EpgRetention.storageCutoff(System.currentTimeMillis(),latest.epgOffsets.values))
+                    if(current!=cached)throw SelectionChanged()
+                    db.execSQL("UPDATE guide_meta SET updated=? WHERE source=?",arrayOf<Any>(now,source.id))
+                    EpgHttpCache.record(db,source.id,cached.copy(version=version))
+                    db.setTransactionSuccessful()
+                } finally { db.endTransaction() }
+            } }
+            android.util.Log.i("TVWaveEPG","unchanged body=${downloaded.exists()} fetch_ms=${fetched-started}")
+            return null
+        }
+
+        context.ensureActive()
+        val result=downloaded.inputStream().use { file ->
+            Epg.Bounded(file,Epg.MAX_COMPRESSED).use { input ->
+                EpgCache.stage(staged,input,snapshot.channels,source,now,progress={ count ->
+                    context.ensureActive()
+                    report("${label}\n${EpgProgress.processing(count,input.count,downloaded.length())}")
+                },oldest=oldest,state=snapshot)
+            }
+        }
+        val parsed=SystemClock.elapsedRealtime()
+        context.ensureActive()
+        awaitTurn()
+        val turnStarted=SystemClock.elapsedRealtime()
+        report(tr("saving",label))
+        stateLock.withLock { Repository(this).use { repo ->
+            val latest=repo.load()
+            if(sourceMissing(latest,source))throw UserError(tr("the_source_has_changed_update_it_again"))
+            if(selection!=EpgHttpCache.selection(latest,source.id) ||
+                oldest>EpgRetention.storageCutoff(System.currentTimeMillis(),latest.epgOffsets.values))throw SelectionChanged()
+            // An interrupted import resumes from disk without attributing stale HTTP headers to it.
+            val entry=version?.let { ImportedEpg(it,selection,oldest,result.programmes) }
+            repo.installEpg(staged,source,latest,entry)
+        } }
+        android.util.Log.i("TVWaveEPG","source installed programmes=${result.programmes} fetch_ms=${fetched-started} parse_ms=${parsed-fetched} wait_ms=${turnStarted-parsed} save_ms=${SystemClock.elapsedRealtime()-turnStarted}")
+        return result.programmes
+    }
+    private fun sourceMissing(state:AppState,source:EpgSource)=state.sources.none{it.id==source.id && it.url==source.url}
+
     private fun removePending(id:String){prefs(this).edit().putString("queue",JSONArray(pending(this).filter{it!=id}).toString()).commit()}
-    override fun onTimeout(startId:Int,fgsType:Int){activeCall?.cancel();job?.cancel();stopSelf()}
+    override fun onTimeout(startId:Int,fgsType:Int){job?.cancel();downloader.cancel();stopSelf()}
     override fun onDestroy(){
         if(instance===this)instance=null
-        activeCall?.cancel();scope.cancel();wake?.let{if(it.isHeld)it.release()};wake=null
+        scope.cancel();downloader.cancel();wake?.let{if(it.isHeld)it.release()};wake=null
         val current=job
         if(current==null)worker.close()else current.invokeOnCompletion{worker.close()}
         super.onDestroy()

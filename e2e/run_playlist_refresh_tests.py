@@ -107,7 +107,12 @@ try:
             else:
                 flow(case)
                 native('assertOneEpgUpdated' if case == 'epg-one' else 'assertAllEpgUpdated')
-                check_requests(['/list', '/broken', '/guide'] + ([] if case == 'epg-one' else ['/other']))
+                if case == 'epg-one':
+                    check_requests(['/list', '/broken', '/guide'])
+                else:
+                    # Playlist refresh precedes the two independent XMLTV downloads.
+                    assert requests[:2] == ['/list', '/broken'], requests
+                    assert sorted(requests[2:]) == ['/guide', '/other'], requests
             results.append({'case': case, 'passed': True, 'requests': requests.copy()})
             print(case, 'PASS', flush=True)
         except Exception:

@@ -60,14 +60,27 @@ object Epg {
         val probe=PushbackInputStream(BufferedInputStream(Bounded(input,MAX_COMPRESSED)),2)
         val a=probe.read();val b=probe.read();if(b>=0)probe.unread(b);if(a>=0)probe.unread(a)
         val xml=Bounded(if(a==0x1f&&b==0x8b)GZIPInputStream(probe,65536)else probe,MAX_XML)
+        // XMLTV channels repeatedly use the same full timestamp, including its UTC offset.
+        val parsedTimes = HashMap<String,Long>()
+        fun parsedTime(value:String?):Long? {
+            if(value == null)return null
+            parsedTimes[value]?.let { return it }
+            val parsed = time(value) ?: return null
+            if(value.length <= 32) {
+                if(parsedTimes.size >= 16384) parsedTimes.clear()
+                parsedTimes[value] = parsed
+            }
+            return parsed
+        }
         val definitions=mutableListOf<EpgChannel>();var mapping:Map<String,String>?=null;var wanted=emptySet<String>()
         var channelId="";var channelIcon="";var aliases=mutableListOf<String>();var pid="";var start:Long?=null;var end:Long?=null
-        var title="";var desc="";var capture="";var text=StringBuilder();var depth=0;var root=false;var rows=0;var seen=0;var matchedSeen=0
+        var title="";var desc="";var capture="";val text=StringBuilder();var skipProgramme=false;var depth=0;var root=false;var rows=0;var seen=0;var matchedSeen=0
         val handler=object:DefaultHandler2(){
             override fun resolveEntity(publicId:String?,systemId:String?)=InputSource(StringReader(""))
             override fun internalEntityDecl(name:String?,value:String?){throw UserError(tr("the_epg_contains_unsupported_xml_entities"))}
             override fun startElement(uri:String?,local:String?,q:String,attrs:Attributes){
                 depth++;if(depth>32)throw UserError(tr("the_xmltv_structure_is_too_complex"))
+                if(skipProgramme)return
                 if(depth==1){if(q!="tv")throw UserError(tr("this_is_not_xmltv_a_tv_element_was_expected"));root=true}
                 when(q){
                     "channel"->{channelId=attrs.getValue("id").orEmpty().take(256);channelIcon="";aliases=mutableListOf()}
@@ -75,17 +88,27 @@ object Epg {
                     "programme"->{
                         if(mapping==null){mapping=match(channels,definitions);wanted=selectChannels?.invoke(definitions)?:if(includeUnmatched)definitions.map{it.id}.toSet()else mapping!!.values.toSet();onCatalog(definitions)}
                         pid=attrs.getValue("channel").orEmpty()
-                        if(pid in wanted)matchedSeen++
-                        start=if(pid in wanted)time(attrs.getValue("start").orEmpty())else null
-                        end=if(start!=null)time(attrs.getValue("stop").orEmpty())else null
+                        val selected=pid in wanted
+                        if(selected)matchedSeen++
+                        start=if(selected)parsedTime(attrs.getValue("start"))else null
+                        end=if(start!=null)parsedTime(attrs.getValue("stop"))else null
                         title="";desc=""
+                        if(depth==2){
+                            val from=start;val until=end
+                            skipProgramme=from==null || (until ?: (from+86400000L))<=oldest || (until!=null && until<=from)
+                        }
                         seen++;if(seen%10000==0)onProgress(seen)
                     }
-                    "display-name","title","desc"->{if(q=="display-name"||start!=null){capture=q;text=StringBuilder()}}
+                    "display-name","title","desc"->{if(q=="display-name"||start!=null){capture=q;text.setLength(0)}}
                 }
             }
             override fun characters(chars:CharArray,offset:Int,length:Int){val limit=if(capture=="desc")MAX_DESCRIPTION else 2048;if(capture.isNotEmpty()&&text.length<limit)text.append(chars,offset,minOf(length,limit-text.length))}
             override fun endElement(uri:String?,local:String?,q:String){
+                if(skipProgramme){
+                    if(depth==2)skipProgramme=false
+                    depth--
+                    return
+                }
                 if(q==capture){val value=text.toString().trim();when(q){"display-name"->if(aliases.size<30)aliases.add(value.take(512));"title"->if(title.isEmpty())title=value.take(512);"desc"->if(desc.isEmpty())desc=value};capture=""}
                 if(q=="channel"){if(channelId.isNotBlank())definitions.add(EpgChannel(channelId,aliases.toList(),channelIcon));channelId="";if(definitions.size>20000)throw UserError(tr("too_many_channels_in_the_epg"))}
                 if(q=="programme"){

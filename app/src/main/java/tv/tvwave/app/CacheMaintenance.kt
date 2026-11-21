@@ -22,7 +22,13 @@ object CacheMaintenance {
             }
             val active=state.sources.map{it.id}.toSet()
             stored.filter{it !in active}.forEach{EpgCache.remove(db,it)}
-            db.delete("guide_programme","end<=?",arrayOf(EpgRetention.storageCutoff(now,state.epgOffsets.values).toString()))
+            val cutoff=EpgRetention.storageCutoff(now,state.epgOffsets.values)
+            val expired=db.delete("guide_programme","end<=?",arrayOf(cutoff.toString()))
+            if(expired>0)db.execSQL("UPDATE guide_http SET oldest=MAX(oldest,?)",arrayOf(cutoff))
+            if(expired>0 && state.sources.size>1) {
+                val catalogs=state.sources.associate { it.id to EpgCache.catalog(db,it.id) }
+                EpgMerge.rebuild(db,EpgLinks.ranked(state,catalogs))
+            }
             db.delete("guide_summary",null,null)
             db.execSQL("INSERT OR REPLACE INTO cache_maintenance VALUES (1,?)",arrayOf(now))
             db.setTransactionSuccessful()
