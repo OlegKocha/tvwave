@@ -1,0 +1,53 @@
+appId: tv.tvwave.app.debug
+---
+- launchApp
+- assertVisible:
+    id: guide-brand
+# Explicitly enter remote mode after the preceding text-entry flow.
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Up
+- assertVisible:
+    id: guide
+    focused: true
+- pressKey: Remote Dpad Center
+- extendedWaitUntil:
+    visible: "Смотрим · Тестовый канал 1"
+    timeout: 15000
+- pressKey: Remote Dpad Center
+- assertVisible:
+    id: player-pause
+    focused: true
+- pressKey: Remote Media Play Pause
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: player-recent
+- assertVisible: "Тестовый канал 2"
+- pressKey: Remote Dpad Up
+- assertNotVisible:
+    id: player-recent
+- pressKey: Remote Dpad Down
+- pressKey: Remote Dpad Right
+- longPressOn: "Тестовый канал 3"
+- assertVisible:
+    id: recent-channel-delete-cancel
+- pressKey: back
+- assertVisible: "Тестовый канал 3"
+- longPressOn: "Тестовый канал 3"
+# Return from touch mode to D-pad navigation.
+- pressKey: Remote Dpad Left
+- pressKey: Remote Dpad Right
+- assertVisible:
+    id: recent-channel-delete-confirm
+    focused: true
+- pressKey: Remote Dpad Center
+- assertNotVisible: "Тестовый канал 3"
+- pressKey: back
+- assertNotVisible:
+    id: player-recent
+- pressKey: Remote Dpad Down
+- assertNotVisible: "Тестовый канал 3"
+- pressKey: Remote Dpad Center
+- assertNotVisible:
+    id: player-recent
+- pressKey: Remote Dpad Center
+- assertVisible: "Тестовый канал 2"

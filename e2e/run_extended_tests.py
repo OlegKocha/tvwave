@@ -15,8 +15,9 @@ for flow in ['playlists','settings','epg-mapping','channels','files','restore']:
  if args.flow not in ['all',flow]:continue
  shell('shell','am','force-stop','tv.tvwave.app.debug')
  r=shell('shell','am','instrument','-w','-e','class','tv.tvwave.app.TvNavigationTest#seedForMaestro','-e','rich','true','-e','font','60' if flow=='restore' else str(args.font),'tv.tvwave.app.debug.test/androidx.test.runner.AndroidJUnitRunner');assert b'OK (1 test)' in r.stdout
+ if flow in ['files','restore']:
+  shell('shell','appops','set','--uid','tv.tvwave.app.debug','MANAGE_EXTERNAL_STORAGE','allow')
  if flow=='files':
-  shell('shell','appops','set','tv.tvwave.app.debug','MANAGE_EXTERNAL_STORAGE','allow')
   for name,data in [('qa-bad.m3u8',b'invalid'),('qa-good.m3u8',urllib.request.urlopen('http://127.0.0.1:8765/playlist.m3u8').read())]:
    f=out/name;f.write_bytes(data);shell('push',str(f),'/sdcard/Download/'+name)
  if flow=='restore':
@@ -39,7 +40,7 @@ for flow in ['playlists','settings','epg-mapping','channels','files','restore']:
   # can otherwise break every subsequent group after this reinstall scenario.
   subprocess.run(adb+['uninstall','tv.tvwave.app.debug.test'],capture_output=True)
   shell('install',str(project/'app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk'))
-  shell('shell','appops','set','tv.tvwave.app.debug','MANAGE_EXTERNAL_STORAGE','allow')
+  shell('shell','appops','set','--uid','tv.tvwave.app.debug','MANAGE_EXTERNAL_STORAGE','allow')
   shell('push',str(backup),'/sdcard/Download/qa-export.tvwavebackup')
  ok=run('extended/'+flow+'.yaml',flow)
  if flow=='channels' and ok:

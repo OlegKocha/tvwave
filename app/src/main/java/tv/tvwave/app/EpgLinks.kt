@@ -28,5 +28,6 @@ object EpgLinks {
 class RecentOrder {
     private var inside=false
     var ids:List<String> = emptyList();private set
+    fun retain(history:List<String>){if(inside)ids=ids.filter{it in history}}
     fun enter(recent:Boolean,history:List<String>){if(recent&&!inside)ids=history.toList();inside=recent}
 }

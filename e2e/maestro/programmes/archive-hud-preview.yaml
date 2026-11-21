@@ -19,11 +19,19 @@ appId: tv.tvwave.app.debug
     focused: true
 - pressKey: Remote Dpad Center
 - pressKey: Remote Dpad Right
+- assertVisible:
+    id: player-position
+    text: "Перейти на 01:0[5-9]"
+- pressKey: Remote Dpad Left
+- assertVisible:
+    id: player-position
+    text: "Перейти на 00:0[5-9]"
+- pressKey: Remote Dpad Right
 - pressKey: Remote Dpad Right
 - pressKey: Remote Dpad Right
 - assertVisible:
     id: player-position
-    text: "Перейти на 15:0[5-9]"
+    text: "Перейти на 03:0[5-9]"
 - takeScreenshot: archive-seek-preview
 - pressKey: back
 - assertVisible:
@@ -36,7 +44,7 @@ appId: tv.tvwave.app.debug
 - pressKey: Remote Dpad Center
 - assertVisible:
     id: player-position
-    text: "15:0[5-9]"
+    text: "03:0[5-9]"
 - assertNotVisible:
     id: channel-browser
 - pressKey: Remote Dpad Down
@@ -44,3 +52,6 @@ appId: tv.tvwave.app.debug
     id: player-pause
     focused: true
 - takeScreenshot: archive-hud-paused
+- pressKey: Remote Dpad Down
+- assertVisible:
+    id: player-recent

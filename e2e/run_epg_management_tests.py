@@ -34,6 +34,7 @@ if a.flow=='assignment':
  native('seedManagement');flow('assignment');native('assertAssignmentAndOffset')
 if a.flow in ['all','backup']:
  native('seedMultipleForBackup')
+ shell('shell','appops','set','--uid','tv.tvwave.app.debug','MANAGE_EXTERNAL_STORAGE','allow')
  shell('shell','mkdir','-p','/sdcard/Download/TVWave')
  before=set(shell('shell','ls','/sdcard/Download/TVWave').stdout.decode().splitlines())
  flow('export','backup-export.yaml')
@@ -61,6 +62,6 @@ if a.flow in ['all','backup']:
  shell('uninstall','tv.tvwave.app.debug');shell('install',str(project/'app/build/outputs/apk/debug/app-debug.apk'))
  shell('install','-r',str(project/'app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk'))
  assert name in shell('shell','ls','/sdcard/Download/TVWave').stdout.decode()
- shell('shell','appops','set','tv.tvwave.app.debug','MANAGE_EXTERNAL_STORAGE','allow')
+ shell('shell','appops','set','--uid','tv.tvwave.app.debug','MANAGE_EXTERNAL_STORAGE','allow')
  flow('restore-empty',env={'BACKUP_NAME':'01-valid.tvwb'});native('assertRestoredConfiguration');flow('restore-use')
 print('Targeted EPG/backup tests passed',flush=True)

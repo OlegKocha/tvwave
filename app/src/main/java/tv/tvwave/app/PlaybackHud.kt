@@ -28,6 +28,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
+data class RecordingTrack(val start:Float,val liveEdge:Float,val playhead:Float)
+
 /** Native remote-control preview, shared by live and archive playback. */
 @Composable
 fun PlaybackHud(
@@ -35,7 +37,7 @@ fun PlaybackHud(
     position:Long, duration:Long, available:Long, editing:Boolean,
     canRewind:Boolean, canForward:Boolean, canSeek:Boolean, subtitles:Boolean, favourite:Boolean,
     wanted:String, requests:MutableMap<String,FocusRequester>, onFocus:(String)->Unit,
-    onAction:(String)->Unit, archiveDays:Int=0, health:PlaybackHealth=PlaybackHealth(), diagnosticsEnabled:Boolean=false, savedStart:Long?=null, savedEnd:Long?=null
+    onAction:(String)->Unit, archiveDays:Int=0, health:PlaybackHealth=PlaybackHealth(), diagnosticsEnabled:Boolean=false, localRecording:Boolean=false, recordingTrack:RecordingTrack?=null
 ) {
     val compact=LocalDensity.current.fontScale>1.1f
     val progress=if(duration>0)position.toFloat()/duration else 0f
@@ -49,20 +51,34 @@ fun PlaybackHud(
             .focusRequester(timeline).onFocusChanged{focused=it.isFocused;if(it.isFocused)onFocus("player-timeline")}
             .border(if(focused)T.focusLine else 0.dp,if(focused)T.accent else T.transparent,RoundedCornerShape(T.radius))
             .clickable(enabled=canSeek,role=Role.Button){onAction("player-timeline")}
-            .semantics{contentDescription=tr("programme_position");stateDescription=tr("of", playbackClock(position), playbackClock(duration))}
+            .semantics{contentDescription=if(localRecording)tr("timeshift_position")else tr("programme_position");stateDescription=tr("of", playbackClock(position), playbackClock(duration))}
             .padding(horizontal=T.tiny),verticalArrangement=Arrangement.SpaceEvenly) {
             Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween){
-                Text(if(editing)tr("go_to", playbackClock(position))else if(duration>0)playbackClock(position)else tr("no_timing_information"),Modifier.testTag("player-position"),color=T.text,fontSize=T.hudLabel,lineHeight=T.hudLabel*1.2f)
-                Text(if(duration>0)"−${playbackClock((duration-position).coerceAtLeast(0))}"else "",color=T.muted,fontSize=T.hudLabel,lineHeight=T.hudLabel*1.2f)
+                val positionLabel=when {
+                    editing -> tr("go_to",playbackClock(position))
+                    duration>0 -> playbackClock(position)
+                    else -> tr("no_timing_information")
+                }
+                val remainingLabel=if(duration>0){
+                    val remaining=playbackClock((duration-position).coerceAtLeast(0))
+                    if(localRecording)remaining else "−$remaining"
+                }else ""
+                Text(positionLabel,Modifier.testTag("player-position"),color=T.text,fontSize=T.hudLabel,lineHeight=T.hudLabel*1.2f)
+                Text(remainingLabel,Modifier.testTag("player-remaining"),color=T.muted,fontSize=T.hudLabel,lineHeight=T.hudLabel*1.2f)
             }
             Canvas(Modifier.fillMaxWidth().height(T.hudKnob)){
                 val y=size.height/2
                 drawLine(T.hudTrack,Offset(0f,y),Offset(size.width,y),T.hudTrackHeight.toPx())
-                drawLine(T.inputBorder,Offset(0f,y),Offset(size.width*loaded.coerceIn(0f,1f),y),T.hudTrackHeight.toPx())
-                if(savedStart!=null&&savedEnd!=null&&duration>0){
-                    drawLine(T.timeshiftTrack,Offset(size.width*(savedStart.toFloat()/duration).coerceIn(0f,1f),y),Offset(size.width*(savedEnd.toFloat()/duration).coerceIn(0f,1f),y),T.timeshiftTrackHeight.toPx())
-                }else drawLine(T.accent,Offset(0f,y),Offset(size.width*progress.coerceIn(0f,1f),y),T.hudTrackHeight.toPx())
-                if(duration>0)drawCircle(T.accent,T.hudKnob.toPx()/2,Offset(size.width*progress.coerceIn(0f,1f),y))
+                if(localRecording){
+                    recordingTrack?.let { track ->
+                        if(track.liveEdge>track.start)drawLine(T.timeshiftTrack,Offset(size.width*track.start,y),Offset(size.width*track.liveEdge,y),T.timeshiftTrackHeight.toPx())
+                        drawCircle(T.accent,T.hudKnob.toPx()/2,Offset(size.width*track.playhead,y))
+                    }
+                }else{
+                    drawLine(T.inputBorder,Offset(0f,y),Offset(size.width*loaded.coerceIn(0f,1f),y),T.hudTrackHeight.toPx())
+                    drawLine(T.accent,Offset(0f,y),Offset(size.width*progress.coerceIn(0f,1f),y),T.hudTrackHeight.toPx())
+                    if(duration>0)drawCircle(T.accent,T.hudKnob.toPx()/2,Offset(size.width*progress.coerceIn(0f,1f),y))
+                }
             }
         }
         Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(T.small)){

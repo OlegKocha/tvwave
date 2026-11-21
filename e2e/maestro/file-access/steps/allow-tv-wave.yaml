@@ -1,0 +1,32 @@
+appId: tv.tvwave.app.debug
+---
+# Android TV lists every app with this permission. Move focus to our row.
+- assertVisible:
+    id: file-access-settings
+    focused: true
+- pressKey: Remote Dpad Center
+- repeat:
+    times: 24
+    while:
+      notVisible:
+        focused: true
+        containsDescendants:
+          - text: TV Wave
+    commands:
+      - pressKey: Remote Dpad Down
+- assertVisible:
+    focused: true
+    containsDescendants:
+      - text: TV Wave
+      - id: android:id/switch_widget
+        checked: false
+- takeScreenshot: android-permission
+- pressKey: Remote Dpad Center
+# The summary can still say "Not allowed" after the switch changes.
+- assertVisible:
+    focused: true
+    containsDescendants:
+      - text: TV Wave
+      - id: android:id/switch_widget
+        checked: true
+- pressKey: back

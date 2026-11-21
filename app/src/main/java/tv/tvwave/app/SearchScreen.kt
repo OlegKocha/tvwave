@@ -381,7 +381,7 @@ private data class SearchEntry(val key:String,val channel:Channel,val programme:
     }
     }
     pendingDeletion?.let{query->
-        SearchHistoryDeleteDialog(query,deletionOpeningDownTime,onDismiss={dismissDeletion()},onDelete={
+        HistoryDeleteDialog(tr("search_history_delete_query",query),"search-history",deletionOpeningDownTime,onDismiss={dismissDeletion()},onDelete={
             onRemoveQuery(query)
             recentIndex=recentIndex.coerceIn(0,(state.recentQueries.size-1).coerceAtLeast(0))
             dismissDeletion()
@@ -389,7 +389,7 @@ private data class SearchEntry(val key:String,val channel:Channel,val programme:
     }
 }
 
-@Composable private fun SearchHistoryDeleteDialog(query:String,openingKeyDownTime:Long?,onDismiss:()->Unit,onDelete:()->Unit){
+@Composable internal fun HistoryDeleteDialog(itemLabel:String,tagPrefix:String,openingKeyDownTime:Long?,onDismiss:()->Unit,onDelete:()->Unit){
     val cancelFocus=remember{FocusRequester()}
     val deleteFocus=remember{FocusRequester()}
     var blockedOkDownTime by remember{mutableStateOf(openingKeyDownTime)}
@@ -405,15 +405,15 @@ private data class SearchEntry(val key:String,val channel:Channel,val programme:
                     }else{blockedOkDownTime=null;false}
                 }else false
             }
-            .semantics{testTagsAsResourceId=true}.testTag("search-history-delete-dialog"),
+            .semantics{testTagsAsResourceId=true}.testTag("$tagPrefix-delete-dialog"),
             horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(T.gap)){
             Text(tr("search_history_delete_title"),color=T.text,fontSize=T.title,fontWeight=FontWeight.SemiBold,textAlign=TextAlign.Center)
-            Text(tr("search_history_delete_query",query),color=T.muted,fontSize=T.caption,textAlign=TextAlign.Center,maxLines=2,overflow=TextOverflow.Ellipsis)
+            Text(itemLabel,color=T.muted,fontSize=T.caption,textAlign=TextAlign.Center,maxLines=2,overflow=TextOverflow.Ellipsis)
             Spacer(Modifier.height(T.small))
             Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(T.gap)){
-                SearchHistoryDialogButton(tr("cancel_m245"),"search-history-delete-cancel",
+                SearchHistoryDialogButton(tr("cancel_m245"),"$tagPrefix-delete-cancel",
                     Modifier.weight(1f).focusRequester(cancelFocus).focusProperties{left=FocusRequester.Cancel;right=deleteFocus},onDismiss)
-                SearchHistoryDialogButton(tr("delete"),"search-history-delete-confirm",
+                SearchHistoryDialogButton(tr("delete"),"$tagPrefix-delete-confirm",
                     Modifier.weight(1f).focusRequester(deleteFocus).focusProperties{left=cancelFocus;right=FocusRequester.Cancel},onDelete)
             }
         }

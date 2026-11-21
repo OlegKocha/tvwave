@@ -1,17 +1,7 @@
 appId: tv.tvwave.app.debug
 ---
-- assertVisible:
-    id: file-access-dialog
-- tapOn:
-    id: file-access-settings
-- repeat:
-    times: 10
-    while:
-      notVisible: "Not allowed"
-    commands:
-      - pressKey: Remote Dpad Down
-- tapOn: "Not allowed"
-- pressKey: back
+- runFlow: steps/open-export.yaml
+- runFlow: steps/allow-tv-wave.yaml
 - extendedWaitUntil:
     visible: ".*Копия проверена и сохранена.*"
     timeout: 15000

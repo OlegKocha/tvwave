@@ -60,16 +60,19 @@ class ArchiveHudTest {
             key(KeyEvent.KEYCODE_DPAD_LEFT);key(KeyEvent.KEYCODE_DPAD_LEFT);key(KeyEvent.KEYCODE_DPAD_CENTER)
             waitFor("Rewind five seconds returns to the paused position"){kotlin.math.abs(position() - pausedAt) < 500}
             key(KeyEvent.KEYCODE_DPAD_UP);key(KeyEvent.KEYCODE_DPAD_CENTER)
-            repeat(6){key(KeyEvent.KEYCODE_DPAD_RIGHT)}
-            assertTrue(field<Long?>("seekDraft")!!>=1800000)
+            val start=field<Long?>("seekDraft")!!
+            key(KeyEvent.KEYCODE_DPAD_RIGHT)
+            assertEquals(start+60_000L,field<Long?>("seekDraft")!!)
+            key(KeyEvent.KEYCODE_DPAD_LEFT)
+            assertEquals(start,field<Long?>("seekDraft")!!)
             assertTrue("Preview must not seek the player",position()<5000)
             SystemClock.sleep(3300)
             assertTrue("HUD stays visible during seek editing",visible("player-timeline"))
             key(KeyEvent.KEYCODE_BACK)
             assertNull(field<Long?>("seekDraft"));assertTrue(position()<5000)
             key(KeyEvent.KEYCODE_DPAD_CENTER);repeat(6){key(KeyEvent.KEYCODE_DPAD_RIGHT)};key(KeyEvent.KEYCODE_DPAD_CENTER)
-            waitFor("OK commits 30-minute seek"){position()>=1800000}
-            key(KeyEvent.KEYCODE_DPAD_CENTER);repeat(7){key(KeyEvent.KEYCODE_DPAD_RIGHT)};key(KeyEvent.KEYCODE_DPAD_CENTER)
+            waitFor("OK commits a six-minute seek"){kotlin.math.abs(position()-pausedAt-360_000L)<500}
+            key(KeyEvent.KEYCODE_DPAD_CENTER);repeat(54){key(KeyEvent.KEYCODE_DPAD_RIGHT)};key(KeyEvent.KEYCODE_DPAD_CENTER)
             key(KeyEvent.KEYCODE_MEDIA_PLAY)
             waitFor("End choice"){visible("archive-next")&&visible("archive-end-live")}
             key(KeyEvent.KEYCODE_DPAD_CENTER)

@@ -164,7 +164,9 @@ class ProgrammeRemindersTest {
         val store=ProgrammeReminders(ctx.getSharedPreferences("programme_reminders",0))
         ActivityScenario.launch(MainActivity::class.java).use{s->
             waitFor("Guide loaded"){device.hasObject(By.text("Тестовый канал 1"))}
-            key(KeyEvent.KEYCODE_DPAD_RIGHT);key(KeyEvent.KEYCODE_DPAD_RIGHT)
+            // Choose the second future programme. The first can already be within
+            // its five-minute notification window while we are testing the list.
+            repeat(3) { key(KeyEvent.KEYCODE_DPAD_RIGHT) }
             hold();visible("reminder-confirm")
             assertTrue("Releasing the opening hold must not save a reminder",storeEmpty())
             assertTrue("Hold must not open programme details",!device.hasObject(By.res("programme-details")))

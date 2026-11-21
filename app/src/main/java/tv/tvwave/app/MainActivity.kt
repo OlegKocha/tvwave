@@ -103,6 +103,8 @@ import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.DefaultRenderersFactory
+import androidx.media3.exoplayer.mediacodec.MediaCodecInfo
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.drop
@@ -266,7 +268,6 @@ class MainActivity : ComponentActivity() {
     private var hudFocus by mutableStateOf("player-pause")
     private lateinit var playbackDiagnostics:PlaybackDiagnostics
     private var diagnosticsOpen by mutableStateOf(false)
-    private var hudUtilityFocus="player-subtitles"
     private val recovery=PlaybackRecovery()
     private var recoveryJob:Job?=null
     private var stableJob:Job?=null
@@ -275,6 +276,7 @@ class MainActivity : ComponentActivity() {
     private var phoneSession by mutableStateOf<PhoneLink?>(null)
     private var phoneTarget="source"
     private var phoneSeconds by mutableLongStateOf(0L)
+    private var recentHud by mutableStateOf(false)
     private var controls by mutableStateOf(true)
     private var interaction by mutableLongStateOf(0)
     private var group by mutableStateOf(BuiltinGroups.ALL)
@@ -299,6 +301,13 @@ class MainActivity : ComponentActivity() {
     private lateinit var timeshift:Timeshift
     private var timeshiftDelayed by mutableStateOf(false)
     private var timeshiftTick by mutableLongStateOf(0)
+    // Epoch time of the normal live playhead minus elapsedRealtime at the instant
+    // the viewer leaves live. Keep this anchor across subsequent pauses and seeks.
+    private var liveClockOffset=0L
+    private fun leaveLive(time:Long) {
+        if(!timeshiftDelayed)liveClockOffset=time-SystemClock.elapsedRealtime()
+        timeshiftDelayed=true
+    }
     private var localPauseTime:Long?=null
     private val localPlayback get()=::player.isInitialized && timeshift.active && player.currentMediaItem?.localConfiguration?.uri?.scheme=="tvwave-timeshift"
     private fun localTime():Long {
@@ -307,17 +316,49 @@ class MainActivity : ComponentActivity() {
         return ((manifest?.mediaPlaylist?.startTimeUs?.div(1000)?:timeshift.window.start)+player.currentPosition).coerceIn(timeshift.window.start,timeshift.window.end)
     }
     private fun timelineProgramme()=archiveSession?.programme?:programme(playing?.id,if(localPlayback)localTime()else System.currentTimeMillis())
-    private fun playbackTimelineStart()=timelineProgramme()?.start?:timeshift.window.start
+    // The recorder can publish a segment before ExoPlayer refreshes its playlist,
+    // and evict one while it is still listed there. Only their intersection is seekable.
+    private data class RecordedRange(val origin:Long,val start:Long,val end:Long,val cursor:Long,val manifestLimit:Long) {
+        val duration get()=end-start
+        val canRewind get()=cursor>start
+        val canForward get()=end-cursor>=1000
+        fun offset(time:Long) = time.coerceIn(start,end)-start
+        fun target(time:Long) = time.coerceIn(start,end)
+        fun track(programme:Programme?, preview:Long?):RecordingTrack {
+            val left=minOf(start,programme?.start?:start)
+            val right=maxOf(end,programme?.end?:manifestLimit)
+            val width=(right-left).coerceAtLeast(1).toFloat()
+            return RecordingTrack((start-left)/width,(end-left)/width,(target(preview?:cursor)-left)/width)
+        }
+    }
+    private fun recordedRange():RecordedRange? {
+        if(!localPlayback || !player.isCurrentMediaItemSeekable)return null
+        val media=(player.currentManifest as? androidx.media3.exoplayer.hls.HlsManifest)?.mediaPlaylist?:return null
+        if(!media.hasProgramDateTime || media.baseUri!=timeshift.uri.toString())return null
+        val saved=timeshift.window
+        val origin=media.startTimeUs/1000
+        val start=maxOf(saved.start,origin)
+        val end=minOf(saved.end,origin+media.durationUs/1000)
+        if(end<=start)return null
+        val cursor=localPauseTime?.takeUnless{player.isPlaying}?: (origin+player.currentPosition)
+        val playhead=cursor.coerceIn(start,end-1)
+        val liveEdge=if(timeshiftDelayed)
+            (liveClockOffset+SystemClock.elapsedRealtime()).coerceIn(playhead,end-1)
+        else playhead
+        return RecordedRange(origin,start,liveEdge,playhead,end)
+    }
     private fun seekLocal(time:Long){
-        val w=timeshift.window;if(!localPlayback||!w.ready)return
-        val start=(player.currentManifest as? androidx.media3.exoplayer.hls.HlsManifest)?.mediaPlaylist?.startTimeUs?.div(1000)?:w.start
-        val target=time.coerceIn(w.start,(w.end-1000).coerceAtLeast(w.start))
-        localPauseTime=if(player.isPlaying)null else target
-        timeshiftDelayed=true;player.seekTo((target-start).coerceAtLeast(0));interaction++
+        val range=recordedRange()?:return
+        val target=range.target(time)
+        if(target==range.cursor)return
+        leaveLive(range.end)
+        if(target==range.end && player.playWhenReady)timeshiftDelayed=false
+        localPauseTime=if(player.playWhenReady)null else target
+        player.seekTo(target-range.origin);interaction++
     }
     private fun startLive(channel:Channel, shouldPlay:Boolean=true, switchingLiveChannel:Boolean=false){
         ensureTimeshift()
-        timeshiftDelayed=false;localPauseTime=null;timeshiftTick++
+        timeshiftDelayed=false;localPauseTime=null;seekDraft=null;timeshiftTick++
         fun play(uri:android.net.Uri, resume:Boolean=shouldPlay){
             player.setMediaItem(MediaItem.Builder().setUri(uri).setLiveConfiguration(MediaItem.LiveConfiguration.Builder().setMinPlaybackSpeed(1f).setMaxPlaybackSpeed(1f).build()).build())
             player.prepare();player.playWhenReady=resume;applyTracks()
@@ -332,7 +373,7 @@ class MainActivity : ComponentActivity() {
         }
         playback="buffering";updateKeepScreen()
         timeshift.start(channel.url,data.timeshiftMb,{if(playing?.id==channel.id)timeshiftTick++},{
-            if(playing?.id==channel.id){val resume=if(player.currentMediaItem?.localConfiguration?.uri?.scheme=="tvwave-timeshift")player.playWhenReady else shouldPlay;timeshiftTick++;timeshiftDelayed=false;localPauseTime=null;message=tr("timeshift_unavailable");play(android.net.Uri.parse(channel.url),resume)}
+            if(playing?.id==channel.id){val resume=if(player.currentMediaItem?.localConfiguration?.uri?.scheme=="tvwave-timeshift")player.playWhenReady else shouldPlay;timeshiftTick++;timeshiftDelayed=false;localPauseTime=null;seekDraft=null;message=tr("timeshift_unavailable");play(android.net.Uri.parse(channel.url),resume)}
         })
         // Fetch the live playlist while the first decoder pipeline is being created.
         ensurePlayer()
@@ -385,6 +426,17 @@ class MainActivity : ComponentActivity() {
         ensureTimeshift()
         // Keep platform decoders first; fall back to FFmpeg when a TV lacks an audio codec (e.g. MP2).
         val renderers=DefaultRenderersFactory(this)
+            .setMediaCodecSelector { mime, secure, tunneling ->
+                MediaCodecSelector.DEFAULT.getDecoderInfos(mime, secure, tunneling).map { codec ->
+                    // Goldfish advertises adaptive AVC but after a downsize it paints only
+                    // the top-left of the previous output buffer. Reconfigure on size changes.
+                    if (codec.name == "c2.goldfish.h264.decoder" && codec.adaptive)
+                        MediaCodecInfo.newInstance(codec.name, codec.mimeType, codec.codecMimeType,
+                            codec.capabilities, codec.hardwareAccelerated, codec.softwareOnly,
+                            codec.vendor, /* forceDisableAdaptive = */ true, codec.secure)
+                    else codec
+                }
+            }
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
         // Media requests can remain open while the player consumes its buffer.
         // Keep connection/read timeouts, but no deadline for the entire stream.
@@ -443,6 +495,7 @@ class MainActivity : ComponentActivity() {
     }
     override fun onStart(){super.onStart();if(::player.isInitialized)playbackDisplayMode.setForeground(true);if(loaded&&!loadFailed)EpgUpdateService.resume(this)}
     override fun onStop(){
+        recentHud=false
         if(::player.isInitialized){
             if(player.currentMediaItem?.localConfiguration?.uri?.scheme=="tvwave-timeshift"){
                 player.stop();localPauseTime=null
@@ -587,6 +640,7 @@ class MainActivity : ComponentActivity() {
     private fun applyTracks(){ if(!::player.isInitialized)return;player.trackSelectionParameters=player.trackSelectionParameters.buildUpon().setPreferredAudioLanguage(data.audioLanguage.ifEmpty{null}).setTrackTypeDisabled(C.TRACK_TYPE_TEXT,!data.subtitles).build() }
     private fun tune(channel:Channel,full:Boolean=true) {
         cancelArchiveLoad()
+        recentHud=false
         val wasArchive=archiveSession!=null
         if(wasArchive){archiveSession=null;seekDraft=null;archiveEnded=false;player.stop()}
         hudFocus="player-pause"
@@ -603,11 +657,17 @@ class MainActivity : ComponentActivity() {
         playing=channel;selectedChannel=channel.id;videoHeight=0;playbackError="";playback="buffering";controls=true;interaction++
         startLive(channel,switchingLiveChannel=switchingLiveChannel)
         player.repeatMode=if(ArchivePreview.source(this,channel)!=null)Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+        updateViewing { state ->
+            if(state.channels.none{it.id==channel.id}) state
+            else state.copy(last=channel.id,history=(listOf(channel.id)+state.history.filter{it!=channel.id}).take(30))
+        }
+    }
+    private fun updateViewing(transform:(AppState)->AppState) {
         lifecycleScope.launch { try{stateLock.withLock {
             syncRefreshedPlaylists()
-            if(data.channels.none{it.id==channel.id})return@withLock
-            val next=data.copy(last=channel.id,history=(listOf(channel.id)+data.history.filter{it!=channel.id}).take(30))
-            withContext(NonCancellable){withContext(Dispatchers.IO){repository.saveViewing(next.last,next.history)};data=next}
+            val next=transform(data)
+            if(next===data)return@withLock
+            withContext(NonCancellable){withContext(Dispatchers.IO){repository.saveViewing(next.last,next.history)};recentOrder.retain(next.history);data=next}
         }}catch(e:Exception){error=safeError(e)} }
     }
     private fun requestProgrammePlayback() {
@@ -639,7 +699,7 @@ class MainActivity : ComponentActivity() {
         val windowStart=first?.let{IlookArchive.segmentTime(it)}?:a.firstSegmentStartMs
         return a.position(windowStart,player.currentPosition,System.currentTimeMillis())
     }
-    private fun pausePlayback(){if(localPlayback){localPauseTime=localTime();timeshiftDelayed=true};if(archiveSession!=null)archivePosition=currentArchivePosition();player.pause()}
+    private fun pausePlayback(){if(localPlayback){val time=localTime();leaveLive(time);localPauseTime=time};if(archiveSession!=null)archivePosition=currentArchivePosition();player.pause()}
     private fun resumePlayback(resetRecovery:Boolean=true){
         val a=archiveSession
         if(a==null&&!localPlayback&&player.currentMediaItem?.localConfiguration?.uri?.scheme=="tvwave-timeshift"){
@@ -699,7 +759,6 @@ class MainActivity : ComponentActivity() {
         player.stop();tune(channel,false);screen="player";controls=true;hudFocus="player-pause";interaction++
     }
     private fun seekArchive(position:Long) {
-        if(localPlayback){seekLocal(playbackTimelineStart()+position);return}
         val a=archiveSession
         val now=System.currentTimeMillis()
         if(a==null){
@@ -716,7 +775,7 @@ class MainActivity : ComponentActivity() {
         interaction++
     }
     private fun seekBy(delta:Long) {
-        if(localPlayback){seekLocal(localTime()+delta);return}
+        if(localPlayback){recordedRange()?.let{seekLocal(it.cursor+delta)};return}
         val p=archiveSession?.programme?:programme(playing?.id)?:return
         val position=if(archiveSession!=null)currentArchivePosition() else System.currentTimeMillis()-p.start
         seekArchive(position+delta)
@@ -725,9 +784,10 @@ class MainActivity : ComponentActivity() {
     private fun hudKeys():List<String> = buildList {
         val p=archiveSession?.programme?:programme(playing?.id)
         val position=if(archiveSession!=null)currentArchivePosition() else if(p!=null)System.currentTimeMillis()-p.start else 0
-        if(if(localPlayback)localTime()>timeshift.window.start else archiveSourceAvailable()&&p!=null&&position>0)add("player-rewind")
+        val range=recordedRange()
+        if(if(localPlayback)range?.canRewind==true else archiveSourceAvailable()&&p!=null&&position>0)add("player-rewind")
         add("player-pause")
-        if(if(localPlayback)timeshiftDelayed&&localTime()<timeshift.window.end-1000 else archiveSession!=null&&position<archiveSession!!.available(System.currentTimeMillis())-1000)add("player-forward")
+        if(if(localPlayback)range?.canForward==true else archiveSession!=null&&position<archiveSession!!.available(System.currentTimeMillis())-1000)add("player-forward")
         add("player-subtitles");add("player-favourite")
         add("player-buffer");add("player-live")
     }
@@ -740,8 +800,8 @@ class MainActivity : ComponentActivity() {
             "player-live"->if(timeshiftDelayed||archiveSession!=null||!player.isPlaying)returnToLive()
             "player-buffer"->{diagnosticsOpen=!diagnosticsOpen;controls=true}
             "player-timeline"->{
-                if(seekDraft!=null){val target=seekDraft!!;seekDraft=null;seekArchive(target)}
-                else if(localPlayback){seekDraft=(localTime()-playbackTimelineStart()).coerceAtLeast(0)}
+                if(seekDraft!=null){val target=seekDraft!!;seekDraft=null;if(localPlayback)seekLocal(target)else seekArchive(target)}
+                else if(localPlayback){seekDraft=recordedRange()?.cursor}
                 else{val p=archiveSession?.programme?:programme(playing?.id)?:return;seekDraft=if(archiveSession!=null)currentArchivePosition() else (System.currentTimeMillis()-p.start).coerceAtLeast(0)}
             }
             "player-subtitles"->persist(updateTracks=true){it.copy(subtitles=!it.subtitles)}
@@ -786,6 +846,7 @@ class MainActivity : ComponentActivity() {
     private fun back() {
         if(reminderDialog!=null){reminderDialog=null;return}
         if(activeReminder!=null){activeReminder=null;return}
+        if(recentHud && screen=="player"){recentHud=false;controls=false;return}
         if(applying)return
         if(archiveLoadJob?.isActive==true){cancelArchiveLoad();message="";return}
         if(pendingProgramme!=null){pendingProgramme=null;interaction++;return}
@@ -847,27 +908,53 @@ class MainActivity : ComponentActivity() {
         }
         if(reminderDialog!=null||activeReminder!=null)return false
         if(pendingProgramme!=null||archiveEnded)return false
+        if(screen=="player" && recentHud){
+            // Leave media keys with the player. The panel handles navigation and OK.
+            when(event.keyCode){
+                AndroidKey.KEYCODE_MEDIA_PLAY,AndroidKey.KEYCODE_MEDIA_PAUSE,
+                AndroidKey.KEYCODE_MEDIA_PLAY_PAUSE,AndroidKey.KEYCODE_MEDIA_STOP->recentHud=false
+                else->return false
+            }
+        }
+        if(screen=="player" && event.keyCode==AndroidKey.KEYCODE_DPAD_DOWN){
+            if(event.action==AndroidKey.ACTION_DOWN && event.repeatCount==0){
+                interaction++
+                val next=if(controls)when(hudFocus){
+                    "player-timeline" -> "player-pause"
+                    "player-subtitles" -> "player-buffer"
+                    "player-favourite" -> "player-live"
+                    else -> null // The transport, buffer and live controls form the bottom row.
+                }else null
+                seekDraft=null
+                if(next!=null)hudFocus=next
+                else {hudFocus="player-pause";controls=false;diagnosticsOpen=false;recentHud=true}
+            }
+            return true
+        }
+        if(screen=="player" && !controls && event.keyCode==AndroidKey.KEYCODE_DPAD_UP)return true
         if(screen=="player"&&event.keyCode in listOf(AndroidKey.KEYCODE_DPAD_LEFT,AndroidKey.KEYCODE_DPAD_RIGHT,AndroidKey.KEYCODE_DPAD_UP,AndroidKey.KEYCODE_DPAD_DOWN)){
             if(event.action==AndroidKey.ACTION_DOWN){
                 val horizontal=event.keyCode in listOf(AndroidKey.KEYCODE_DPAD_LEFT,AndroidKey.KEYCODE_DPAD_RIGHT)
                 val delta=if(event.keyCode==AndroidKey.KEYCODE_DPAD_LEFT||event.keyCode==AndroidKey.KEYCODE_DPAD_UP)-1 else 1
                 if(!controls){
-                    if(archiveSession==null&&!horizontal){val all=filtered();val i=all.indexOfFirst{it.id==playing?.id};if(all.isNotEmpty())tune(all[Math.floorMod(i+delta,all.size)],false)}
                     controls=true;hudFocus="player-pause"
                 }else if(seekDraft!=null){
-                    if(horizontal){if(localPlayback){val origin=playbackTimelineStart();seekDraft=(seekDraft!!+delta*300000L).coerceIn((timeshift.window.start-origin).coerceAtLeast(0),(minOf(timeshift.window.end,timelineProgramme()?.end?:Long.MAX_VALUE)-origin-1000).coerceAtLeast((timeshift.window.start-origin).coerceAtLeast(0)))}else{val p=archiveSession?.programme?:programme(playing?.id);if(p!=null)seekDraft=(seekDraft!!+delta*300000L).coerceIn(0,(minOf(p.end,System.currentTimeMillis())-p.start).coerceAtLeast(0))}}
+                    if(horizontal){
+                        val target=seekDraft!!+delta*60_000L
+                        if(localPlayback)recordedRange()?.let{seekDraft=it.target(target)}
+                        else (archiveSession?.programme?:programme(playing?.id))?.let{p->
+                            seekDraft=target.coerceIn(0,(minOf(p.end,System.currentTimeMillis())-p.start).coerceAtLeast(0))
+                        }
+                    }
                 }else if(horizontal){
                     if(hudFocus!="player-timeline"){
                         val keys=hudKeys();val index=keys.indexOf(hudFocus).coerceAtLeast(0)
                         if(delta<0&&index==0){selectedChannel=playing?.id?:filtered().firstOrNull()?.id.orEmpty();guideTime=0L;browseZone=0;panelStack.clear();screen="browse";controls=false}
                         else hudFocus=keys[(index+delta).coerceIn(0,keys.lastIndex)]
                     }
-                }else if(delta<0&&hudFocus in listOf("player-live","player-buffer"))hudFocus=hudUtilityFocus
-                else if(delta>0&&hudFocus in listOf("player-subtitles","player-favourite")){
-                    hudUtilityFocus=hudFocus
-                    hudFocus=if(hudFocus=="player-subtitles")"player-buffer"else"player-live"
-                }else if(delta<0&&archiveSourceAvailable()&&(localPlayback||(archiveSession?.programme?:programme(playing?.id))!=null))hudFocus="player-timeline"
-                else if(delta>0&&hudFocus !in listOf("player-live","player-buffer"))hudFocus="player-pause"
+                }else if(hudFocus=="player-live")hudFocus="player-favourite"
+                else if(hudFocus=="player-buffer")hudFocus="player-subtitles"
+                else if(archiveSourceAvailable()&&(localPlayback||(archiveSession?.programme?:programme(playing?.id))!=null))hudFocus="player-timeline"
                 interaction++
             }
             return true
@@ -882,9 +969,6 @@ class MainActivity : ComponentActivity() {
             if(screen=="player" && event.keyCode in listOf(AndroidKey.KEYCODE_DPAD_UP,AndroidKey.KEYCODE_DPAD_DOWN,AndroidKey.KEYCODE_DPAD_LEFT,AndroidKey.KEYCODE_DPAD_RIGHT,AndroidKey.KEYCODE_DPAD_CENTER,AndroidKey.KEYCODE_ENTER)) {
                 interaction++
                 if(!controls) {
-                    if(event.keyCode in listOf(AndroidKey.KEYCODE_DPAD_UP,AndroidKey.KEYCODE_DPAD_DOWN)) {
-                        val all=filtered();val i=all.indexOfFirst{it.id==playing?.id};if(all.isNotEmpty())tune(all[(i+(if(event.keyCode==AndroidKey.KEYCODE_DPAD_DOWN)1 else -1)+all.size)%all.size],false)
-                    }
                     controls=true;return true
                 }
             }
@@ -1456,7 +1540,7 @@ class MainActivity : ComponentActivity() {
                     androidx.media3.common.MimeTypes.VIDEO_H264,false,false)
             }
         }
-        LaunchedEffect(screen){programmeOk.cancel()}
+        LaunchedEffect(screen){programmeOk.cancel();if(screen!="player")recentHud=false}
         LaunchedEffect(loaded){
             if(!loaded)return@LaunchedEffect
             reminders=reminderStore.read()
@@ -1530,7 +1614,7 @@ class MainActivity : ComponentActivity() {
                 delay(250)
             }
         }
-        LaunchedEffect(screen,if(screen=="player")controls else false){rootFocus.requestFocus()}
+        LaunchedEffect(screen,if(screen=="player")controls else false,recentHud){if(!recentHud)rootFocus.requestFocus()}
         LaunchedEffect(L10n.language){while(true){nowTime=System.currentTimeMillis();clockText=SimpleDateFormat("HH:mm",L10n.locale).format(Date());guideDate=SimpleDateFormat("EEE, d MMMM · HH:mm",L10n.locale).format(Date());delay(15000)}}
         MaterialTheme(colorScheme=darkColorScheme(background=T.bg,surface=T.surface,onBackground=T.text,onSurface=T.text,primary=T.accent,onPrimary=T.onAccent,error=T.danger)) {
             BackHandler{back()}
@@ -2432,31 +2516,43 @@ class MainActivity : ComponentActivity() {
         val current=timelineProgramme()
         var liveNow by remember{mutableLongStateOf(System.currentTimeMillis())}
         LaunchedEffect(controls,a){while(controls&&a==null){liveNow=System.currentTimeMillis();delay(1000)}}
-        val saved=liveNow.let{if(local)timeshift.window else null}
-        val origin=current?.start?:saved?.start?:0L
-        val duration=current?.let{(it.end-it.start).coerceAtLeast(1)}?:saved?.let{it.end-it.start}?:0L
-        val available=if(local)(saved!!.end-origin).coerceIn(0,duration)else current?.let{(liveNow-it.start).coerceIn(0,duration)}?:0L
-        val position=if(local)(localTime()-origin).coerceIn(0,duration)else if(a!=null)archivePosition.coerceAtMost(duration)else available
-        val canSeek=active&&archiveSourceAvailable()&&(local||current!=null)
-        val forward=if(local)timeshiftDelayed&&localTime()<saved!!.end-1000 else a!=null&&position<a.available(System.currentTimeMillis())-1000
+        // Read on each HUD tick, including while paused as the recording grows.
+        val recorded=liveNow.let { if(local)recordedRange() else null }
+        val localSource=::player.isInitialized && player.currentMediaItem?.localConfiguration?.uri?.scheme=="tvwave-timeshift"
+        val duration=if(localSource)recorded?.duration?:0L else current?.let{(it.end-it.start).coerceAtLeast(1)}?:0L
+        val available=if(localSource)duration else current?.let{(liveNow-it.start).coerceIn(0,duration)}?:0L
+        val position=if(localSource)recorded?.let{it.cursor-it.start}?:0L else if(a!=null)archivePosition.coerceAtMost(duration)else available
+        val shownPosition=if(localSource)recorded?.let{it.offset(seekDraft?:it.cursor)}?:0L else seekDraft?:position
+        val canSeek=active && (if(localSource)recorded!=null else archiveSourceAvailable()&&current!=null)
+        val forward=if(localSource)recorded?.canForward==true else a!=null&&position<a.available(System.currentTimeMillis())-1000
         LaunchedEffect(canSeek,position>0,forward,playback){
             if(hudFocus=="player-timeline"&&!canSeek||hudFocus!="player-timeline"&&hudFocus !in hudKeys())hudFocus="player-pause"
         }
         BoxWithConstraints(Modifier.fillMaxSize()){
             val hudMinimum=maxHeight*T.hudFraction
             if(!archiveLoading&&!(archiveSession!=null&&playback=="buffering")&&((playback!="playing"&&playback!="paused")||recoveryStatus.isNotEmpty()))Text(recoveryStatus.ifEmpty{when(playback){"buffering"->tr("connecting_m225");"paused"->tr("pause");"error"->playbackError;else->tr("playback_stopped")}},Modifier.align(Alignment.Center).widthIn(max=T.recoveryWidth).testTag("playback-status").background(T.hud,RoundedCornerShape(T.radius)).padding(T.pad),color=T.text,fontSize=T.body)
-            if(controls){
+            if(controls||recentHud){
                 Row(Modifier.fillMaxWidth().padding(horizontal=T.safe,vertical=T.top),horizontalArrangement=Arrangement.SpaceBetween){
                     Text(playing?.name.orEmpty(),Modifier.background(T.hud,RoundedCornerShape(T.radius)).padding(T.small),color=T.text,fontSize=T.description,maxLines=1,overflow=TextOverflow.Ellipsis)
                     Text(clockText,Modifier.background(T.hud,RoundedCornerShape(T.radius)).padding(T.small),color=T.text,fontSize=T.body)
                 }
                 Box(Modifier.align(Alignment.BottomCenter)){
-                    PlaybackHud(current?.title?:playing?.name?:tr("live_tv"),
+                    if(active && recentHud){
+                        val channels=remember(data.channels,data.history,playing?.id){
+                            val byId=data.channels.associateBy{it.id}
+                            data.history.filter{it!=playing?.id}.mapNotNull(byId::get)
+                        }
+                        RecentChannelsHud(channels,
+                            logo={channel,color->ChannelLogo(channel,color,color.copy(alpha=.6f))},
+                            onWatch={channel->tune(channel);controls=false},
+                            onClose={recentHud=false;controls=false},
+                            onRemove={id->updateViewing{state->state.copy(history=state.history-id)}})
+                    }else PlaybackHud(current?.title?:playing?.name?:tr("live_tv"),
                         (current?.let{if(a!=null)programmeSpan(it)else timeRange(it)}?:missingEpg(playing?.id))+(if(videoHeight>0)" · ${videoHeight}p"else ""),
                         a==null&&!timeshiftDelayed&&player.isPlaying,if(local&&timeshiftDelayed)tr("timeshift_delayed")else if(a!=null)tr("recording")else if(playback=="paused")tr("pause")else tr("not_live"),hudMinimum,if(recoveryJob?.isActive==true)tr("cancel")else if(playback in listOf("error","stopped"))tr("retry")else if(player.isPlaying)tr("pause")else tr("watch"),!player.isPlaying,
-                        seekDraft?:position,duration,if(a!=null)a.available(System.currentTimeMillis())else available,seekDraft!=null,
-                        canSeek&&(if(local)localTime()>saved!!.start else position>0),forward,canSeek,
-                        data.subtitles,playing?.id in data.favourites,hudFocus,hudRequests,{hudFocus=it},::hudAction,archiveDays=channelArchiveDays(playing),health=health,diagnosticsEnabled=diagnosticsOpen,savedStart=saved?.let{(it.start-origin).coerceIn(0,duration)},savedEnd=saved?.let{(it.end-origin).coerceIn(0,duration)})
+                        shownPosition,duration,if(a!=null)a.available(System.currentTimeMillis())else available,seekDraft!=null,
+                        canSeek&&(if(localSource)recorded?.canRewind==true else position>0),forward,canSeek,
+                        data.subtitles,playing?.id in data.favourites,hudFocus,hudRequests,{hudFocus=it},::hudAction,archiveDays=channelArchiveDays(playing),health=health,diagnosticsEnabled=diagnosticsOpen,localRecording=localSource,recordingTrack=recorded?.track(current,seekDraft))
                 }
             }
             if(active&&controls&&diagnosticsOpen)PlaybackHealthPanel(health,Modifier.align(Alignment.TopEnd).padding(top=80.dp,end=T.safe).width(360.dp))

@@ -2,54 +2,81 @@ appId: tv.tvwave.app.debug
 ---
 - launchApp:
     permissions:
-      all: deny
+      all: unset
 - runFlow:
     when:
       visible:
         id: "language:ru"
     commands:
-      - tapOn:
+      - repeat:
+          times: 8
+          while:
+            notVisible:
+              id: "language:ru"
+              focused: true
+          commands:
+            - pressKey: Remote Dpad Down
+      - assertVisible:
           id: "language:ru"
+          focused: true
+      - pressKey: Remote Dpad Center
+- assertVisible:
+    id: add
+    focused: true
+- pressKey: Remote Dpad Right
 - assertVisible:
     id: restore
-- tapOn:
-    id: restore
+    focused: true
+- pressKey: Remote Dpad Center
 - assertVisible:
     id: file-access-dialog
 - pressKey: back
 - assertNotVisible:
     id: file-access-dialog
-- tapOn:
-    id: restore
-- tapOn:
-    id: file-access-settings
-- repeat:
-    while:
-      notVisible: "Not allowed"
+- runFlow:
+    when:
+      visible:
+        id: add
+        focused: true
     commands:
-      - pressKey: Remote Dpad Down
-- tapOn: "Not allowed"
-- pressKey: back
+      - pressKey: Remote Dpad Right
+- assertVisible:
+    id: restore
+    focused: true
+- pressKey: Remote Dpad Center
+- runFlow: steps/allow-tv-wave.yaml
 - assertVisible:
     id: file-browser
-- tapOn:
+- repeat:
+    times: 24
+    while:
+      notVisible:
+        id: "file:/storage/emulated/0/Download/permission-restore.tvwb"
+        focused: true
+    commands:
+      - pressKey: Remote Dpad Down
+- assertVisible:
     id: "file:/storage/emulated/0/Download/permission-restore.tvwb"
+    focused: true
+- pressKey: Remote Dpad Center
 - extendedWaitUntil:
     visible:
-      id: restore-summary
+      id: restore-apply
+      enabled: true
+      focused: true
     timeout: 15000
+- assertVisible: '.*Плейлистов: 1.*'
+- assertVisible: '.*Каналов: 16.*'
 - takeScreenshot: backup-verified
-- tapOn:
-    id: restore-apply
+- pressKey: Remote Dpad Center
 - extendedWaitUntil:
-    visible:
-      id: guide-brand
+    visible: 'Все каналы · 16'
     timeout: 15000
 - takeScreenshot: restored-guide
 - pressKey: home
+# The restored guide no longer needs access to the backup file.
 - launchApp:
     stopApp: false
     permissions:
       all: deny
-- assertVisible:
-    id: guide-brand
+- assertVisible: 'Все каналы · 16'

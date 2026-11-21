@@ -3,13 +3,20 @@ appId: tv.tvwave.app.debug
 - runFlow: ../programmes/start-preview.yaml
 - pressKey: Remote Dpad Center
 - pressKey: Remote Media Play Pause
-# Channel stepping is active with the HUD hidden.
+# Open recent channels and explicitly select the next channel.
 - pressKey: back
 - pressKey: Remote Dpad Down
+- assertVisible:
+    id: player-recent
+- pressKey: Remote Dpad Center
 - pressKey: Remote Media Play Pause
 - assertVisible: 'Тестовый канал 2'
 - pressKey: back
 - pressKey: Remote Dpad Down
+- assertVisible:
+    id: player-recent
+- pressKey: Remote Dpad Right
+- pressKey: Remote Dpad Center
 - pressKey: Remote Media Play Pause
 - assertVisible: 'Тестовый канал 3'
 - pressKey: Remote Dpad Right

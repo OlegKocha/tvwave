@@ -34,7 +34,7 @@ class TimeshiftTest {
                 launch {
                     socket.use {
                         val reader=it.getInputStream().bufferedReader()
-                        val segment=reader.readLine().contains("/first.ts")
+                        val segment=reader.readLine()?.contains("/first.ts") ?: return@use
                         while(!reader.readLine().isNullOrEmpty()) {}
                         val body=if(segment)bytes else playlist
                         val output=it.getOutputStream()
@@ -160,7 +160,7 @@ class TimeshiftTest {
         val serving=scope.launch(Dispatchers.IO){while(isActive){
             val socket=try{server.accept()}catch(_:Exception){break}
             socket.use{
-                val reader=it.getInputStream().bufferedReader();val path=reader.readLine().split(" ")[1]
+                val reader=it.getInputStream().bufferedReader();val path=reader.readLine()?.split(" ")?.getOrNull(1) ?: return@use
                 while(!reader.readLine().isNullOrEmpty()){}
                 val seq=(SystemClock.elapsedRealtime()-begin)/1000
                 val body=if(path.endsWith("m3u8")) ("#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:$seq\n"+(seq..seq+4).joinToString(""){n->"#EXTINF:1.0,\n$n.ts\n"}).toByteArray() else ByteArray(8192){7}
@@ -194,7 +194,7 @@ class TimeshiftTest {
             val socket=try{server.accept()}catch(_:Exception){break}
             launch(Dispatchers.IO){socket.use{
                 try {
-                    val reader=it.getInputStream().bufferedReader();val path=reader.readLine().split(" ")[1]
+                    val reader=it.getInputStream().bufferedReader();val path=reader.readLine()?.split(" ")?.getOrNull(1) ?: return@use
                     while(!reader.readLine().isNullOrEmpty()){}
                     val seq=(SystemClock.elapsedRealtime()-begin)/1000
                     val isMedia=path.endsWith(".ts")
@@ -237,10 +237,30 @@ class TimeshiftTest {
             await("Loaded channels"){prop<AppState>("data").channels.isNotEmpty()}
             val channel=prop<AppState>("data").channels.first();call("tune",channel,true)
             await("Local playback",25000){isPlaying()&&field<Timeshift>("timeshift").active}
+            fun hasForward():Boolean {
+                var enabled=false
+                scenario.onActivity { activity ->
+                    val keys=MainActivity::class.java.getDeclaredMethod("hudKeys").apply{isAccessible=true}.invoke(activity) as List<*>
+                    enabled="player-forward" in keys
+                }
+                return enabled
+            }
+            assertFalse("Prefetched media is not ahead-of-live history",hasForward())
+            call("hudAction","player-forward")
+            assertFalse(prop<Boolean>("timeshiftDelayed"))
             val ring=field<Timeshift>("timeshift");val firstEnd=ring.window.end
             call("pausePlayback");val paused=position()
             await("Capture continues while paused",12000){ring.window.end>=firstEnd+6000}
             assertTrue(kotlin.math.abs(position()-paused)<500)
+            await("Pause opens a recorded interval ahead"){hasForward()}
+            call("hudAction","player-forward")
+            assertTrue("Seek advances within the recorded interval",position()>paused)
+            call("tune",channel,true)
+            await("Programme metadata remains visible"){device.hasObject(By.res("player-programme-title").textContains("Передача"))}
+            val clock=device.findObject(By.res("player-position")).text
+            assertTrue("Position is in the short local recording: $clock",clock.matches(Regex("00:[0-5][0-9]")))
+            val remaining=device.findObject(By.res("player-remaining")).text
+            assertTrue("Time to live: $remaining",remaining.matches(Regex("00:[0-5][0-9]")))
             call("resumePlayback",true);await("Resume"){isPlaying()}
             call("seekLocal",ring.window.start+1000);await("Seek local"){isPlaying()}
             assertTrue(prop<Boolean>("timeshiftDelayed"))
